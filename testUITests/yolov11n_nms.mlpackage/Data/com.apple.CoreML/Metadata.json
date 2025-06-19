@@ -1,0 +1,19 @@
+{
+  "MLModelVersionStringKey" : "8.3.154",
+  "MLModelDescriptionKey" : "Ultralytics YOLO11n model trained on dataset.yaml",
+  "MLModelCreatorDefinedKey" : {
+    "stride" : "32",
+    "Confidence threshold" : "0.25",
+    "IoU threshold" : "0.45",
+    "docs" : "https:\/\/docs.ultralytics.com",
+    "task" : "detect",
+    "channels" : "3",
+    "imgsz" : "[640, 640]",
+    "date" : "2025-06-15T01:04:11.233528",
+    "batch" : "1",
+    "args" : "{'batch': 1, 'half': False, 'int8': False, 'nms': True}",
+    "names" : "{0: 'sidewalk', 1: 'road', 2: 'crosswalk', 3: 'driveway', 4: 'bike_lane', 5: 'parking_area', 6: 'rail_track', 7: 'service_lane', 8: 'wall', 9: 'fence', 10: 'curb', 11: 'guard_rail', 12: 'temporary_barrier', 13: 'barrier_other', 14: 'pole', 15: 'car', 16: 'truck', 17: 'bus', 18: 'motorcycle', 19: 'bicycle', 20: 'slow_vehicle', 21: 'vehicle_group', 22: 'rail_vehicle', 23: 'boat', 24: 'person', 25: 'cyclist', 26: 'motorcyclist', 27: 'traffic_light', 28: 'traffic_sign', 29: 'street_light', 30: 'traffic_cone', 31: 'bench', 32: 'trash_can', 33: 'fire_hydrant', 34: 'mailbox', 35: 'parking_meter', 36: 'bike_rack', 37: 'phone_booth', 38: 'pothole', 39: 'manhole', 40: 'catch_basin', 41: 'water_valve', 42: 'junction_box', 43: 'building', 44: 'bridge', 45: 'tunnel', 46: 'garage', 47: 'vegetation', 48: 'water', 49: 'terrain', 50: 'animals'}"
+  },
+  "MLModelAuthorKey" : "Ultralytics",
+  "MLModelLicenseKey" : "AGPL-3.0 License (https:\/\/ultralytics.com\/license)"
+}
