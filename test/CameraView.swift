@@ -33,7 +33,7 @@ struct CameraView: UIViewRepresentable {
 
 struct CameraViewWithDetection: View {
     @StateObject private var cameraManager = CameraManager()
-    @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float)] = []
+    @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float, distance: Float?)] = []
     @State private var showingStats = false
     @State private var showingPermissionAlert = false
     @State private var showingSettings = false
@@ -79,29 +79,57 @@ struct CameraViewWithDetection: View {
                         y: (1 - rect.midY) * geometry.size.height
                     )
                     
-                    // Label séparé, positionné au-dessus de la bounding box
-                    HStack(spacing: 4) {
-                        Text(detection.label)
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.red)
-                            .cornerRadius(4)
+                    // Label avec confiance et distance
+                    VStack(spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(detection.label)
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.red)
+                                .cornerRadius(4)
+                            
+                            Text("\(String(format: "%.0f", detection.confidence * 100))%")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(Color.red.opacity(0.8))
+                                .cornerRadius(3)
+                        }
                         
-                        Text("\(String(format: "%.0f", detection.confidence * 100))%")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
-                            .background(Color.red.opacity(0.8))
-                            .cornerRadius(3)
+                        // Distance sous la confiance si LiDAR activé et disponible
+                        if cameraManager.isLiDAREnabled {
+                            if let distance = detection.distance {
+                                // Distance réelle du LiDAR
+                                Text("📏 \(String(format: "%.1f", distance))m")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.blue)
+                                    .cornerRadius(3)
+                            } else {
+                                // TEST : Distance factice pour vérifier l'interface
+                                let testDistance = Float.random(in: 0.5...5.0)
+                                Text("📏 \(String(format: "%.1f", testDistance))m TEST")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.orange)  // Orange pour distinguer le test
+                                    .cornerRadius(3)
+                            }
+                        }
                     }
                     .position(
                         x: rect.midX * geometry.size.width,
-                        y: (1 - rect.maxY) * geometry.size.height - 10
+                        y: (1 - rect.maxY) * geometry.size.height - 15
                     )
                 }
             }
@@ -126,6 +154,17 @@ struct CameraViewWithDetection: View {
                         
                         Text("Objets: \(boundingBoxes.count)")
                             .font(.caption)
+                        
+                        if cameraManager.isLiDARAvailable {
+                            HStack(spacing: 4) {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                                    .font(.caption)
+                                Text(cameraManager.isLiDAREnabled ? "LiDAR" : "No LiDAR")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                            }
+                        }
                     }
                     .foregroundColor(.white)
                     .padding(12)
@@ -222,19 +261,26 @@ struct CameraViewWithDetection: View {
     private func setupCameraManager() {
         cameraManager.delegate = CameraDetectionDelegate { newDetections in
             self.boundingBoxes = newDetections
+            
+            // Debug : Vérifier les distances reçues
+            print("📱 Interface reçoit \(newDetections.count) détections:")
+            for detection in newDetections {
+                let distanceText = detection.distance != nil ? "\(String(format: "%.1f", detection.distance!))m" : "NO DISTANCE"
+                print("   - \(detection.label): \(distanceText)")
+            }
         }
     }
 }
 
-// Delegate pour gérer les détections avec métriques
+// Delegate pour gérer les détections avec métriques et distance
 class CameraDetectionDelegate: CameraManagerDelegate {
-    let onDetections: ([(rect: CGRect, label: String, confidence: Float)]) -> Void
+    let onDetections: ([(rect: CGRect, label: String, confidence: Float, distance: Float?)]) -> Void
     
-    init(onDetections: @escaping ([(rect: CGRect, label: String, confidence: Float)]) -> Void) {
+    init(onDetections: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?)]) -> Void) {
         self.onDetections = onDetections
     }
     
-    func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float)]) {
+    func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?)]) {
         onDetections(detections)
     }
 }

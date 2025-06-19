@@ -46,6 +46,12 @@ struct DetectionSettingsView: View {
                 
                 Divider()
                 
+                // Configuration LiDAR
+                if cameraManager.isLiDARAvailable {
+                    lidarSection
+                    Divider()
+                }
+                
                 // Recherche
                 searchSection
                 
@@ -93,13 +99,24 @@ struct DetectionSettingsView: View {
                 Spacer()
                 
                 VStack(alignment: .trailing) {
-                    Text("Performance")
+                    Text("LiDAR")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Text("\(String(format: "%.1f", cameraManager.currentFPS)) FPS")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.green)
+                    HStack {
+                        if cameraManager.isLiDARAvailable {
+                            Image(systemName: cameraManager.isLiDAREnabled ? "dot.radiowaves.left.and.right" : "dot.radiowaves.left.and.right")
+                                .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                            Text(cameraManager.isLiDAREnabled ? "ON" : "OFF")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                        } else {
+                            Text("N/A")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.gray)
+                        }
+                    }
                 }
             }
             
@@ -155,6 +172,49 @@ struct DetectionSettingsView: View {
             Text("Valeur: \(skipFrames) - FPS estimé: ~\(String(format: "%.1f", 30.0 / Double(skipFrames + 1)))")
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+        .padding()
+    }
+    
+    // MARK: - Section LiDAR
+    private var lidarSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("LiDAR Distance")
+                    .font(.headline)
+                
+                Spacer()
+                
+                Toggle("", isOn: Binding(
+                    get: { cameraManager.isLiDAREnabled },
+                    set: { cameraManager.setLiDAREnabled($0) }
+                ))
+                .labelsHidden()
+            }
+            
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .foregroundColor(.blue)
+                    Text("Mesure de distance en temps réel")
+                        .font(.caption)
+                }
+                
+                HStack {
+                    Image(systemName: "ruler")
+                        .foregroundColor(.blue)
+                    Text("Précision jusqu'à 5 mètres")
+                        .font(.caption)
+                }
+                
+                HStack {
+                    Image(systemName: "battery.25")
+                        .foregroundColor(.orange)
+                    Text("Consomme plus de batterie")
+                        .font(.caption)
+                }
+            }
+            .foregroundColor(.secondary)
         }
         .padding()
     }
