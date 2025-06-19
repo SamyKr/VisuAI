@@ -39,6 +39,7 @@ struct CameraViewWithDetection: View {
     @State private var showingPermissionAlert = false
     @State private var showingSettings = false
     @State private var showingLiDARInfo = false
+    @State private var proximityAlertsEnabled = true
     
     var body: some View {
         ZStack {
@@ -121,7 +122,7 @@ struct CameraViewWithDetection: View {
             Text(getLiDARInfoMessage())
         }
         .sheet(isPresented: $showingSettings) {
-            DetectionSettingsView(isPresented: $showingSettings, cameraManager: cameraManager)
+            CameraDetectionSettingsView(isPresented: $showingSettings, cameraManager: cameraManager)
         }
         .animation(.easeInOut(duration: 0.3), value: showingStats)
     }
@@ -147,7 +148,7 @@ struct CameraViewWithDetection: View {
                 Text("Objets: \(boundingBoxes.count)")
                     .font(.caption)
                 
-                // Status LiDAR
+                // Status LiDAR et vibrations
                 HStack(spacing: 4) {
                     Circle()
                         .fill(getLiDARStatusColor())
@@ -157,6 +158,20 @@ struct CameraViewWithDetection: View {
                         .fontWeight(.bold)
                     Text(getLiDARStatusText())
                         .font(.caption2)
+                }
+                
+                // Status des alertes de proximité
+                if cameraManager.lidarAvailable && cameraManager.isLiDAREnabled {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(proximityAlertsEnabled ? .orange : .gray)
+                            .frame(width: 6, height: 6)
+                        Text("📳")
+                            .font(.caption2)
+                        Text(proximityAlertsEnabled ? "ON" : "OFF")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                    }
                 }
             }
             .foregroundColor(.white)
@@ -178,7 +193,10 @@ struct CameraViewWithDetection: View {
             // Bouton LiDAR
             if cameraManager.lidarAvailable {
                 Button(action: {
-                    let _ = cameraManager.toggleLiDAR()
+                    let success = cameraManager.toggleLiDAR()
+                    if success {
+                        cameraManager.playSuccessFeedback()
+                    }
                 }) {
                     Image(systemName: cameraManager.isLiDAREnabled ? "location.fill" : "location")
                         .font(.title2)
@@ -190,10 +208,32 @@ struct CameraViewWithDetection: View {
                 .onLongPressGesture {
                     showingLiDARInfo = true
                 }
+                
+                // Bouton alertes de proximité (seulement si LiDAR activé)
+                if cameraManager.isLiDAREnabled {
+                    Button(action: {
+                        proximityAlertsEnabled.toggle()
+                        cameraManager.enableProximityAlerts(proximityAlertsEnabled)
+                        cameraManager.playSelectionFeedback()
+                    }) {
+                        Image(systemName: proximityAlertsEnabled ? "bell.fill" : "bell.slash.fill")
+                            .font(.title2)
+                            .foregroundColor(proximityAlertsEnabled ? .orange : .gray)
+                            .padding(12)
+                            .background(Color.black.opacity(0.6))
+                            .cornerRadius(12)
+                    }
+                    .onLongPressGesture {
+                        showingLiDARInfo = true
+                    }
+                }
             }
             
             // Bouton paramètres
-            Button(action: { showingSettings = true }) {
+            Button(action: {
+                showingSettings = true
+                cameraManager.playSelectionFeedback()
+            }) {
                 Image(systemName: "gear")
                     .font(.title2)
                     .foregroundColor(.white)
@@ -203,7 +243,10 @@ struct CameraViewWithDetection: View {
             }
             
             // Bouton pour les statistiques détaillées
-            Button(action: { showingStats.toggle() }) {
+            Button(action: {
+                showingStats.toggle()
+                cameraManager.playSelectionFeedback()
+            }) {
                 Image(systemName: showingStats ? "chart.bar.fill" : "chart.bar")
                     .font(.title2)
                     .foregroundColor(.white)
@@ -225,21 +268,40 @@ struct CameraViewWithDetection: View {
             .background(Color.blue.opacity(0.7))
             .cornerRadius(8)
             
-            // Indicateur LiDAR compact
+            // Indicateurs compacts
             if cameraManager.lidarAvailable {
-                HStack(spacing: 4) {
-                    Image(systemName: "location.fill")
-                        .font(.caption)
-                        .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                HStack(spacing: 8) {
+                    // Indicateur LiDAR
+                    HStack(spacing: 4) {
+                        Image(systemName: "location.fill")
+                            .font(.caption)
+                            .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                        
+                        Text(cameraManager.isLiDAREnabled ? "ON" : "OFF")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                    }
+                    .padding(6)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(6)
                     
-                    Text(cameraManager.isLiDAREnabled ? "ON" : "OFF")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                    // Indicateur alertes de proximité (seulement si LiDAR activé)
+                    if cameraManager.isLiDAREnabled {
+                        HStack(spacing: 4) {
+                            Text("📳")
+                                .font(.caption)
+                            
+                            Text(proximityAlertsEnabled ? "ON" : "OFF")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(proximityAlertsEnabled ? .orange : .gray)
+                        }
+                        .padding(6)
+                        .background(Color.black.opacity(0.5))
+                        .cornerRadius(6)
+                    }
                 }
-                .padding(6)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(6)
             }
             
             Spacer()
@@ -326,6 +388,9 @@ struct CameraViewWithDetection: View {
         if cameraManager.lidarAvailable {
             let _ = cameraManager.enableLiDAR()
         }
+        
+        // Synchroniser l'état des alertes de proximité
+        proximityAlertsEnabled = cameraManager.isProximityAlertsEnabled()
     }
     
     private func getBoundingBoxColor(for distance: Float?) -> Color {
@@ -361,11 +426,28 @@ struct CameraViewWithDetection: View {
     
     private func getLiDARInfoMessage() -> String {
         if !cameraManager.lidarAvailable {
-            return "LiDAR non disponible sur cet appareil. Les distances ne peuvent pas être mesurées."
+            return "LiDAR non disponible sur cet appareil. Les distances et alertes de proximité ne peuvent pas être mesurées."
         } else if cameraManager.isLiDAREnabled {
-            return "LiDAR activé! Les distances sont affichées en bleu à côté de la confiance. Les couleurs des bounding boxes indiquent la distance (rouge = proche, vert = loin)."
+            let dangerDist = cameraManager.getDangerDistance()
+            let alertsStatus = proximityAlertsEnabled ? "activées" : "désactivées"
+            return """
+            LiDAR activé! Les distances sont affichées en bleu à côté de la confiance. 
+            
+            🎨 Les couleurs des bounding boxes indiquent la distance (rouge = proche, vert = loin).
+            
+            📳 Alertes de proximité \(alertsStatus):
+            • Vibrations si objet < \(String(format: "%.1f", dangerDist))m
+            • Touchez l'icône 🔔 pour activer/désactiver
+            """
         } else {
-            return "LiDAR disponible mais désactivé. Touchez l'icône de localisation pour l'activer et afficher les distances."
+            return """
+            LiDAR disponible mais désactivé. 
+            
+            Touchez l'icône de localisation 📍 pour l'activer et bénéficier de:
+            • Affichage des distances en temps réel
+            • Alertes de proximité par vibration
+            • Bounding boxes colorées selon la distance
+            """
         }
     }
     

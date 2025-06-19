@@ -1,13 +1,14 @@
 //
-//  DetectionSettingsView.swift
+//  DetectionSettingsView.swift (Version avec contrôles de vibrations)
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
+//  Updated with vibration controls - 19/06/2025
 //
 
 import SwiftUI
 
-struct DetectionSettingsView: View {
+struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
     @Binding var isPresented: Bool
     @ObservedObject var cameraManager: CameraManager
     
@@ -27,6 +28,17 @@ struct DetectionSettingsView: View {
     @State private var skipFrames: Int = 5
     @State private var searchText = ""
     
+    // États pour les vibrations
+    @State private var proximityAlertsEnabled = true
+    @State private var graduatedVibrationsEnabled = true
+    @State private var graduatedFrequencyEnabled = true
+    @State private var dangerDistance: Float = 1.0
+    @State private var warningDistance: Float = 2.0
+    @State private var minIntensity: Float = 0.3
+    @State private var maxIntensity: Float = 1.0
+    @State private var minCooldown: Double = 0.1
+    @State private var maxCooldown: Double = 0.8
+    
     var filteredClasses: [String] {
         if searchText.isEmpty {
             return allClasses
@@ -41,16 +53,27 @@ struct DetectionSettingsView: View {
                 // En-tête avec statistiques
                 headerView
                 
-                // Configuration Skip Frames
-                skipFramesSection
-                
-                Divider()
-                
-                // Recherche
-                searchSection
-                
-                // Liste des classes
-                classesListSection
+                // Sections des paramètres
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // Configuration Skip Frames
+                        skipFramesSection
+                        
+                        Divider()
+                        
+                        // Configuration des vibrations
+                        vibrationSettingsSection
+                        
+                        Divider()
+                        
+                        // Recherche de classes
+                        searchSection
+                        
+                        // Liste des classes
+                        classesListSection
+                    }
+                    .padding()
+                }
             }
             .navigationTitle("Paramètres de Détection")
             .navigationBarTitleDisplayMode(.inline)
@@ -101,6 +124,18 @@ struct DetectionSettingsView: View {
                         .fontWeight(.bold)
                         .foregroundColor(.green)
                 }
+                
+                if cameraManager.lidarAvailable {
+                    VStack(alignment: .trailing) {
+                        Text("Vibrations")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(proximityAlertsEnabled ? "✅ ON" : "❌ OFF")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(proximityAlertsEnabled ? .orange : .gray)
+                    }
+                }
             }
             
             // Boutons de sélection rapide
@@ -108,17 +143,17 @@ struct DetectionSettingsView: View {
                 Button("Tout sélectionner") {
                     selectedClasses = Set(allClasses)
                 }
-                .buttonStyle(QuickActionButtonStyle(color: .blue))
+                .buttonStyle(CameraQuickActionButtonStyle(color: .blue))  // ← Renommé
                 
                 Button("Tout désélectionner") {
                     selectedClasses.removeAll()
                 }
-                .buttonStyle(QuickActionButtonStyle(color: .red))
+                .buttonStyle(CameraQuickActionButtonStyle(color: .red))  // ← Renommé
                 
                 Button("Par défaut") {
                     resetToDefault()
                 }
-                .buttonStyle(QuickActionButtonStyle(color: .orange))
+                .buttonStyle(CameraQuickActionButtonStyle(color: .orange))  // ← Renommé
             }
         }
         .padding()
@@ -129,7 +164,7 @@ struct DetectionSettingsView: View {
     private var skipFramesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Skip Frames")
+                Text("⚡ Performance")
                     .font(.headline)
                 
                 Spacer()
@@ -156,47 +191,334 @@ struct DetectionSettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .padding()
+    }
+    
+    // MARK: - Section vibrations
+    private var vibrationSettingsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("📳 Alertes de Proximité")
+                    .font(.headline)
+                
+                Spacer()
+                
+                if !cameraManager.lidarAvailable {
+                    Text("LiDAR requis")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            
+            if cameraManager.lidarAvailable {
+                VStack(spacing: 16) {
+                    // Toggle principal
+                    HStack {
+                        Text("Activer les alertes")
+                            .font(.body)
+                        
+                        Spacer()
+                        
+                        Toggle("", isOn: $proximityAlertsEnabled)
+                            .labelsHidden()
+                    }
+                    
+                    if proximityAlertsEnabled {
+                        // Distance de danger
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("🚨 Distance de danger")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                
+                                Spacer()
+                                
+                                Text("\(String(format: "%.1f", dangerDistance))m")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(Color.red.opacity(0.1))
+                                    .cornerRadius(4)
+                            }
+                            
+                            Slider(value: $dangerDistance, in: 0.2...2.0, step: 0.1)
+                            
+                            Text("Triple vibration forte si objet < \(String(format: "%.1f", dangerDistance))m")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Distance d'avertissement
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("⚠️ Distance d'avertissement")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                
+                                Spacer()
+                                
+                                Text("\(String(format: "%.1f", warningDistance))m")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(Color.orange.opacity(0.1))
+                                    .cornerRadius(4)
+                            }
+                            
+                            Slider(value: $warningDistance, in: dangerDistance...5.0, step: 0.1)
+                            
+                            Text("Double vibration modérée si objet < \(String(format: "%.1f", warningDistance))m")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Vibrations graduées (intensité)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("📈 Intensité graduée")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                
+                                Spacer()
+                                
+                                Toggle("", isOn: $graduatedVibrationsEnabled)
+                                    .labelsHidden()
+                            }
+                            
+                            if graduatedVibrationsEnabled {
+                                VStack(spacing: 8) {
+                                    HStack {
+                                        Text("Intensité minimale")
+                                            .font(.caption)
+                                        
+                                        Spacer()
+                                        
+                                        Text("\(String(format: "%.1f", minIntensity))")
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                    }
+                                    
+                                    Slider(value: $minIntensity, in: 0.1...0.9, step: 0.1)
+                                    
+                                    HStack {
+                                        Text("Intensité maximale")
+                                            .font(.caption)
+                                        
+                                        Spacer()
+                                        
+                                        Text("\(String(format: "%.1f", maxIntensity))")
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                    }
+                                    
+                                    Slider(value: $maxIntensity, in: max(minIntensity, 0.5)...1.0, step: 0.1)
+                                }
+                                .padding(.leading, 16)
+                            }
+                            
+                            Text(graduatedVibrationsEnabled ?
+                                 "Plus l'objet est proche, plus la vibration est forte" :
+                                 "Intensité fixe selon le type d'alerte")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Fréquence graduée
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("⚡ Fréquence graduée")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                
+                                Spacer()
+                                
+                                Toggle("", isOn: $graduatedFrequencyEnabled)
+                                    .labelsHidden()
+                            }
+                            
+                            if graduatedFrequencyEnabled {
+                                VStack(spacing: 8) {
+                                    HStack {
+                                        Text("Fréquence max (très proche)")
+                                            .font(.caption)
+                                        
+                                        Spacer()
+                                        
+                                        Text("toutes les \(String(format: "%.2f", minCooldown))s")
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.red)
+                                    }
+                                    
+                                    Slider(value: $minCooldown, in: 0.05...0.5, step: 0.05)
+                                    
+                                    HStack {
+                                        Text("Fréquence min (loin)")
+                                            .font(.caption)
+                                        
+                                        Spacer()
+                                        
+                                        Text("toutes les \(String(format: "%.2f", maxCooldown))s")
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.orange)
+                                    }
+                                    
+                                    Slider(value: $maxCooldown, in: max(minCooldown, 0.3)...2.0, step: 0.1)
+                                }
+                                .padding(.leading, 16)
+                                
+                                // Exemples visuels
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Exemples:")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.secondary)
+                                    
+                                    HStack {
+                                        Text("0.2m:")
+                                            .font(.caption2)
+                                            .foregroundColor(.red)
+                                        Text("████████ toutes les \(String(format: "%.2f", minCooldown))s")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    
+                                    HStack {
+                                        Text("1.0m:")
+                                            .font(.caption2)
+                                            .foregroundColor(.orange)
+                                        Text("████▓▓▓▓ toutes les \(String(format: "%.2f", (minCooldown + maxCooldown) / 2))s")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    
+                                    HStack {
+                                        Text("2.0m:")
+                                            .font(.caption2)
+                                            .foregroundColor(.green)
+                                        Text("██▓▓▓▓▓▓ toutes les \(String(format: "%.2f", maxCooldown))s")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.leading, 16)
+                                .padding(.top, 8)
+                            }
+                            
+                            Text(graduatedFrequencyEnabled ?
+                                 "Plus l'objet est proche, plus les vibrations sont fréquentes" :
+                                 "Fréquence fixe pour toutes les distances")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        // Boutons de test
+                        HStack {
+                            Button("🧪 Tester vibration danger") {
+                                cameraManager.testDangerVibration(intensity: maxIntensity)
+                            }
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.red)
+                            .cornerRadius(8)
+                            
+                            Button("🧪 Tester avertissement") {
+                                cameraManager.testWarningVibration(intensity: minIntensity)
+                            }
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.orange)
+                            .cornerRadius(8)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color.blue.opacity(0.05))
+                .cornerRadius(12)
+            } else {
+                Text("Les alertes de proximité nécessitent un appareil compatible LiDAR (iPhone 12 Pro+, iPad Pro 2020+)")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+            }
+        }
     }
     
     // MARK: - Section de recherche
     private var searchSection: some View {
-        HStack {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("🔍 Classes de Détection")
+                .font(.headline)
             
-            TextField("Rechercher une classe...", text: $searchText)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-            
-            if !searchText.isEmpty {
-                Button("Effacer") {
-                    searchText = ""
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                
+                TextField("Rechercher une classe...", text: $searchText)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                
+                if !searchText.isEmpty {
+                    Button("Effacer") {
+                        searchText = ""
+                    }
+                    .font(.caption)
                 }
-                .font(.caption)
             }
         }
-        .padding()
     }
     
     // MARK: - Liste des classes
     private var classesListSection: some View {
-        List {
+        LazyVStack(spacing: 0) {
             ForEach(groupedClasses.keys.sorted(), id: \.self) { category in
-                Section(header: Text(category.capitalized).font(.headline)) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // En-tête de catégorie
+                    HStack {
+                        Text(category.capitalized)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        
+                        Spacer()
+                        
+                        Text("\(groupedClasses[category]?.count ?? 0)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(4)
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color.gray.opacity(0.1))
+                    
+                    // Classes de la catégorie
                     ForEach(groupedClasses[category] ?? [], id: \.self) { className in
-                        ClassRowView(
+                        CameraClassRowView(  // ← Renommé
                             className: className,
                             isSelected: selectedClasses.contains(className),
                             onToggle: { toggleClass(className) }
                         )
+                        .padding(.horizontal, 12)
                     }
                 }
+                .background(Color.white)
+                .cornerRadius(8)
+                .padding(.bottom, 8)
             }
         }
-        .listStyle(PlainListStyle())
     }
     
-    // MARK: - Groupement des classes par catégorie
+    // MARK: - Helper Methods
+    
     private var groupedClasses: [String: [String]] {
         let filtered = filteredClasses
         
@@ -215,48 +537,29 @@ struct DetectionSettingsView: View {
     
     private func getCategoryForClass(_ className: String) -> String {
         switch className {
-        // Infrastructure routière
         case "sidewalk", "road", "pedestrian crossing", "driveway", "bike lane", "parking area", "railway", "service lane":
             return "🛣️ infrastructure routière"
-            
-        // Barrières et délimitations
         case "wall", "fence", "curb", "guardrail", "temporary barrier", "other barrier":
             return "🚧 barrières"
-            
-        // Véhicules
         case "car", "truck", "bus", "motorcycle", "bicycle", "slow vehicle", "vehicle group", "rail vehicle", "boat":
             return "🚗 véhicules"
-            
-        // Personnes et usagers
         case "person", "cyclist", "motorcyclist":
             return "👥 personnes"
-            
-        // Signalisation et équipements urbains
         case "traffic light", "traffic sign", "streetlight", "traffic cone", "pole":
             return "🚦 signalisation"
-            
-        // Mobilier urbain
         case "bench", "trash can", "fire hydrant", "mailbox", "parking meter", "bike rack", "phone booth":
             return "🏪 mobilier urbain"
-            
-        // Infrastructure technique
         case "pothole", "manhole", "storm drain", "water valve", "junction box":
             return "🔧 infrastructure technique"
-            
-        // Bâtiments et structures
         case "building", "bridge", "tunnel", "garage":
             return "🏢 bâtiments"
-            
-        // Environnement naturel
         case "vegetation", "water", "ground", "animals":
             return "🌿 environnement"
-            
         default:
             return "📦 autres"
         }
     }
     
-    // MARK: - Actions
     private func toggleClass(_ className: String) {
         if selectedClasses.contains(className) {
             selectedClasses.remove(className)
@@ -267,38 +570,85 @@ struct DetectionSettingsView: View {
     
     private func resetToDefault() {
         selectedClasses = Set(allClasses)
-        // Retirer les classes par défaut selon vos spécifications
         selectedClasses.remove("building")
         selectedClasses.remove("vegetation")
         selectedClasses.remove("road")
-        // Ajout d'autres classes d'infrastructure moins importantes par défaut
         selectedClasses.remove("sidewalk")
         selectedClasses.remove("ground")
         selectedClasses.remove("wall")
         selectedClasses.remove("fence")
+        
         skipFrames = 5
+        
+        // Réinitialisation des paramètres de vibration
+        proximityAlertsEnabled = true
+        graduatedVibrationsEnabled = true
+        graduatedFrequencyEnabled = true
+        dangerDistance = 1.0
+        warningDistance = 2.0
+        minIntensity = 0.3
+        maxIntensity = 1.0
+        minCooldown = 0.1
+        maxCooldown = 0.8
     }
     
     private func loadCurrentSettings() {
-        // Charger les paramètres actuels du CameraManager
+        // Charger les paramètres de détection
         skipFrames = cameraManager.getSkipFrames()
         selectedClasses = Set(cameraManager.getActiveClasses())
         
-        // Si aucune classe n'est définie, utiliser les valeurs par défaut
+        // Charger les paramètres de vibration
+        proximityAlertsEnabled = cameraManager.isProximityAlertsEnabled()
+        graduatedVibrationsEnabled = cameraManager.isGraduatedVibrationsEnabled()
+        graduatedFrequencyEnabled = cameraManager.isGraduatedFrequencyEnabled()
+        dangerDistance = cameraManager.getDangerDistance()
+        warningDistance = cameraManager.getWarningDistance()
+        
+        let intensityRange = cameraManager.getIntensityRange()
+        minIntensity = intensityRange.min
+        maxIntensity = intensityRange.max
+        
+        let frequencyRange = cameraManager.getFrequencyRange()
+        minCooldown = frequencyRange.minCooldown
+        maxCooldown = frequencyRange.maxCooldown
+        
         if selectedClasses.isEmpty {
             resetToDefault()
         }
     }
     
     private func saveSettings() {
+        // Sauvegarder les paramètres de détection
         cameraManager.setSkipFrames(skipFrames)
         cameraManager.setActiveClasses(Array(selectedClasses))
-        print("✅ Paramètres sauvegardés: \(selectedClasses.count) classes, skip: \(skipFrames)")
+        
+        // Sauvegarder les paramètres de vibration
+        cameraManager.enableProximityAlerts(proximityAlertsEnabled)
+        cameraManager.enableGraduatedVibrations(graduatedVibrationsEnabled)
+        cameraManager.enableGraduatedFrequency(graduatedFrequencyEnabled)
+        cameraManager.setDangerDistance(dangerDistance)
+        cameraManager.setWarningDistance(warningDistance)
+        cameraManager.setIntensityRange(min: minIntensity, max: maxIntensity)
+        cameraManager.setFrequencyRange(minCooldown: minCooldown, maxCooldown: maxCooldown)
+        
+        // Feedback haptique
+        cameraManager.playSuccessFeedback()
+        
+        print("✅ Paramètres sauvegardés:")
+        print("   - \(selectedClasses.count) classes actives")
+        print("   - Skip frames: \(skipFrames)")
+        print("   - Alertes proximité: \(proximityAlertsEnabled)")
+        print("   - Vibrations graduées: \(graduatedVibrationsEnabled)")
+        print("   - Fréquence graduée: \(graduatedFrequencyEnabled)")
+        print("   - Distance danger: \(dangerDistance)m")
+        print("   - Distance avertissement: \(warningDistance)m")
+        print("   - Intensité: \(minIntensity) - \(maxIntensity)")
+        print("   - Fréquence: \(minCooldown)s - \(maxCooldown)s")
     }
 }
 
-// MARK: - Vue pour chaque ligne de classe
-struct ClassRowView: View {
+// MARK: - Vue pour chaque ligne de classe (Camera version)
+struct CameraClassRowView: View {  // ← Renommé pour éviter conflit
     let className: String
     let isSelected: Bool
     let onToggle: () -> Void
@@ -330,11 +680,12 @@ struct ClassRowView: View {
             .buttonStyle(PlainButtonStyle())
         }
         .contentShape(Rectangle())
+        .padding(.vertical, 4)
     }
 }
 
-// MARK: - Style pour les boutons d'action rapide
-struct QuickActionButtonStyle: ButtonStyle {
+// MARK: - Style pour les boutons d'action rapide (Camera version)
+struct CameraQuickActionButtonStyle: ButtonStyle {  // ← Renommé pour éviter conflit
     let color: Color
     
     func makeBody(configuration: Configuration) -> some View {

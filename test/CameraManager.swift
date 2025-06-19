@@ -33,6 +33,7 @@ class CameraManager: NSObject, ObservableObject {
     
     private let objectDetectionManager = ObjectDetectionManager()
     private let lidarManager = LiDARManager()
+    private let hapticManager = HapticManager()  // ← Nouveau manager pour les vibrations
     
     // Configuration des skip frames
     private var skipFrameCount = 5
@@ -98,7 +99,78 @@ class CameraManager: NSObject, ObservableObject {
         return previewLayer!
     }
     
-    // MARK: - LiDAR Controls
+    // MARK: - Haptic Controls
+    func enableProximityAlerts(_ enabled: Bool) {
+        hapticManager.enableProximityAlerts(enabled)
+    }
+    
+    func isProximityAlertsEnabled() -> Bool {
+        return hapticManager.isProximityAlertsEnabled()
+    }
+    
+    func setDangerDistance(_ distance: Float) {
+        hapticManager.setDangerDistance(distance)
+    }
+    
+    func getDangerDistance() -> Float {
+        return hapticManager.getDangerDistance()
+    }
+    
+    func setWarningDistance(_ distance: Float) {
+        hapticManager.setWarningDistance(distance)
+    }
+    
+    func getWarningDistance() -> Float {
+        return hapticManager.getWarningDistance()
+    }
+    
+    func setIntensityRange(min: Float, max: Float) {
+        hapticManager.setIntensityRange(min: min, max: max)
+    }
+    
+    func getIntensityRange() -> (min: Float, max: Float) {
+        return hapticManager.getIntensityRange()
+    }
+    
+    func enableGraduatedVibrations(_ enabled: Bool) {
+        hapticManager.enableGraduatedVibrations(enabled)
+    }
+    
+    func isGraduatedVibrationsEnabled() -> Bool {
+        return hapticManager.isGraduatedVibrationsEnabled()
+    }
+    
+    func enableGraduatedFrequency(_ enabled: Bool) {
+        hapticManager.enableGraduatedFrequency(enabled)
+    }
+    
+    func isGraduatedFrequencyEnabled() -> Bool {
+        return hapticManager.isGraduatedFrequencyEnabled()
+    }
+    
+    func setFrequencyRange(minCooldown: TimeInterval, maxCooldown: TimeInterval) {
+        hapticManager.setFrequencyRange(minCooldown: minCooldown, maxCooldown: maxCooldown)
+    }
+    
+    func getFrequencyRange() -> (minCooldown: TimeInterval, maxCooldown: TimeInterval) {
+        return hapticManager.getFrequencyRange()
+    }
+    
+    func playSuccessFeedback() {
+        hapticManager.playSuccessFeedback()
+    }
+    
+    func playSelectionFeedback() {
+        hapticManager.playSelectionFeedback()
+    }
+    
+    func testDangerVibration(intensity: Float = 1.0) {
+        hapticManager.testDangerVibration(customIntensity: intensity)
+    }
+    
+    func testWarningVibration(intensity: Float = 0.7) {
+        hapticManager.testWarningVibration(customIntensity: intensity)
+    }
     func enableLiDAR() -> Bool {
         guard lidarAvailable else {
             print("❌ LiDAR non disponible")
@@ -140,12 +212,15 @@ class CameraManager: NSObject, ObservableObject {
             stats += "\n\n" + lidarManager.getLiDARStats()
         }
         
+        stats += "\n\n" + hapticManager.getHapticStats()
+        
         return stats
     }
     
     func resetPerformanceStats() {
         objectDetectionManager.resetStats()
         lidarManager.resetStats()
+        hapticManager.resetStats()
     }
     
     // MARK: - Configuration
@@ -309,6 +384,10 @@ extension CameraManager: AVCaptureDataOutputSynchronizerDelegate {
         ) { [weak self] detections, inferenceTime in
             DispatchQueue.main.async {
                 self?.currentFPS = 1000.0 / inferenceTime
+                
+                // Vérifier la proximité et déclencher les vibrations si nécessaire
+                self?.hapticManager.checkProximityAndAlert(detections: detections)
+                
                 self?.delegate?.didDetectObjects(detections)
             }
         }
@@ -338,6 +417,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 let detectionsWithDistance = detections.map {
                     (rect: $0.rect, label: $0.label, confidence: $0.confidence, distance: nil as Float?)
                 }
+                
+                // Pas de vérification de proximité sans LiDAR (distances non disponibles)
                 
                 // Notifier le délégué des détections
                 self?.delegate?.didDetectObjects(detectionsWithDistance)
