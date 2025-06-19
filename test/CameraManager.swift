@@ -1,44 +1,58 @@
 //
-//  CameraManager.swift
+//  CameraManager.swift (Version avec LiDAR)
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
+//  Updated with LiDAR integration - 19/06/2025
 //
 
 import AVFoundation
 import Vision
 import SwiftUI
 
-// --- LA CORRECTION EST ICI ---
-// On supprime ': AnyObject' pour permettre aux structs de se conformer à ce protocole.
+// Mise à jour du protocole pour inclure la distance
 protocol CameraManagerDelegate {
-    func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float)])
+    func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?)])
 }
-// -----------------------------
 
 class CameraManager: NSObject, ObservableObject {
     @Published var isRunning = false
     @Published var hasPermission = false
-    @Published var currentFPS: Double = 0.0  // Pour afficher les performances
+    @Published var currentFPS: Double = 0.0
+    @Published var isLiDAREnabled = false
+    @Published var lidarAvailable = false
     
-    // Le 'weak' est toujours important ici pour éviter les cycles de rétention
-    // même si le délégué peut être une struct (car la struct n'a pas de cycle de rétention directe avec le manager)
     var delegate: CameraManagerDelegate?
     
     private let captureSession = AVCaptureSession()
     private let videoDataOutput = AVCaptureVideoDataOutput()
+    private let depthDataOutput = AVCaptureDepthDataOutput()
+    private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private var previewLayer: AVCaptureVideoPreviewLayer?
     
     private let objectDetectionManager = ObjectDetectionManager()
+    private let lidarManager = LiDARManager()
     
     // Configuration des skip frames
-    private var skipFrameCount = 5  // Par défaut, traite 1 frame sur 6
+    private var skipFrameCount = 5
     private var frameCounter = 0
+    
+    // Variables pour la synchronisation des données
+    private var lastImageBuffer: CVPixelBuffer?
+    private var lastDepthData: AVDepthData?
+    private var imageSize: CGSize = .zero
     
     override init() {
         super.init()
+        
+        // Vérifier la disponibilité du LiDAR
+        lidarAvailable = lidarManager.isAvailable()
+        
         setupCaptureSession()
+        
+        print("🎥 CameraManager initialisé")
+        print("📏 LiDAR disponible: \(lidarAvailable ? "✅" : "❌")")
     }
     
     func requestPermission() {
@@ -84,17 +98,57 @@ class CameraManager: NSObject, ObservableObject {
         return previewLayer!
     }
     
-    // Fonction pour obtenir les statistiques de performance
-    func getPerformanceStats() -> String {
-        return objectDetectionManager.getPerformanceStats()
+    // MARK: - LiDAR Controls
+    func enableLiDAR() -> Bool {
+        guard lidarAvailable else {
+            print("❌ LiDAR non disponible")
+            return false
+        }
+        
+        let success = lidarManager.enableDepthCapture()
+        if success {
+            DispatchQueue.main.async {
+                self.isLiDAREnabled = true
+            }
+            print("✅ LiDAR activé")
+        }
+        return success
     }
     
-    // Fonction pour réinitialiser les statistiques
+    func disableLiDAR() {
+        lidarManager.disableDepthCapture()
+        DispatchQueue.main.async {
+            self.isLiDAREnabled = false
+        }
+        print("⏹️ LiDAR désactivé")
+    }
+    
+    func toggleLiDAR() -> Bool {
+        if isLiDAREnabled {
+            disableLiDAR()
+            return false
+        } else {
+            return enableLiDAR()
+        }
+    }
+    
+    // MARK: - Statistics
+    func getPerformanceStats() -> String {
+        var stats = objectDetectionManager.getPerformanceStats()
+        
+        if lidarAvailable {
+            stats += "\n\n" + lidarManager.getLiDARStats()
+        }
+        
+        return stats
+    }
+    
     func resetPerformanceStats() {
         objectDetectionManager.resetStats()
+        lidarManager.resetStats()
     }
     
-    // MARK: - Configuration Skip Frames
+    // MARK: - Configuration
     func setSkipFrames(_ count: Int) {
         skipFrameCount = max(0, count)
         print("⚙️ Skip frames défini à: \(skipFrameCount)")
@@ -104,7 +158,6 @@ class CameraManager: NSObject, ObservableObject {
         return skipFrameCount
     }
     
-    // MARK: - Configuration des classes actives
     func setActiveClasses(_ classes: [String]) {
         objectDetectionManager.setActiveClasses(classes)
     }
@@ -113,12 +166,18 @@ class CameraManager: NSObject, ObservableObject {
         return objectDetectionManager.getActiveClasses()
     }
     
+    // MARK: - Setup
     private func setupCaptureSession() {
         sessionQueue.async {
             self.captureSession.beginConfiguration()
             
-            // Ajouter l'entrée vidéo
-            guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+            // Configuration de la session pour de meilleures performances
+            if self.captureSession.canSetSessionPreset(.hd1920x1080) {
+                self.captureSession.sessionPreset = .hd1920x1080
+            }
+            
+            // Ajouter l'entrée vidéo avec support LiDAR si disponible
+            guard let videoDevice = self.getBestCameraDevice(),
                   let videoDeviceInput = try? AVCaptureDeviceInput(device: videoDevice),
                   self.captureSession.canAddInput(videoDeviceInput) else {
                 print("❌ Impossible de configurer l'entrée vidéo")
@@ -127,24 +186,141 @@ class CameraManager: NSObject, ObservableObject {
             
             self.captureSession.addInput(videoDeviceInput)
             
-            // Configurer la sortie vidéo pour la détection
+            // Stocker la taille de l'image pour les calculs de distance
+            let dimensions = CMVideoFormatDescriptionGetDimensions(videoDevice.activeFormat.formatDescription)
+            self.imageSize = CGSize(width: Int(dimensions.width), height: Int(dimensions.height))
+            
+            // Configurer la sortie vidéo
             if self.captureSession.canAddOutput(self.videoDataOutput) {
                 self.captureSession.addOutput(self.videoDataOutput)
                 
-                self.videoDataOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "video.processing.queue"))
                 self.videoDataOutput.videoSettings = [
                     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
                 ]
+                
+                // Configuration pour de meilleures performances
+                self.videoDataOutput.alwaysDiscardsLateVideoFrames = true
             }
             
+            // Configurer la sortie de profondeur si LiDAR disponible
+            if self.lidarAvailable && self.captureSession.canAddOutput(self.depthDataOutput) {
+                self.captureSession.addOutput(self.depthDataOutput)
+                
+                // Connecter la sortie de profondeur à l'entrée vidéo
+                if let connection = self.depthDataOutput.connection(with: .depthData) {
+                    connection.isEnabled = true
+                }
+                
+                // Configuration du format de profondeur
+                if let depthFormat = self.getBestDepthFormat(for: videoDevice) {
+                    try? videoDevice.lockForConfiguration()
+                    videoDevice.activeDepthDataFormat = depthFormat
+                    videoDevice.unlockForConfiguration()
+                    print("✅ Format de profondeur configuré: \(depthFormat)")
+                }
+                
+                print("✅ Sortie de profondeur LiDAR configurée")
+            }
+            
+            // Configurer le synchronizer pour coordonner les données
+            self.configureSynchronizer()
+            
             self.captureSession.commitConfiguration()
+            print("✅ Session de capture configurée avec LiDAR: \(self.lidarAvailable)")
+        }
+    }
+    
+    private func getBestCameraDevice() -> AVCaptureDevice? {
+        // Essayer d'abord la caméra avec LiDAR
+        if lidarAvailable {
+            if let lidarDevice = AVCaptureDevice.default(.builtInLiDARDepthCamera, for: .video, position: .back) {
+                print("✅ Utilisation de la caméra LiDAR")
+                return lidarDevice
+            }
+        }
+        
+        // Sinon, utiliser la caméra standard
+        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+    }
+    
+    private func getBestDepthFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        let depthFormats = device.activeFormat.supportedDepthDataFormats
+        
+        // Chercher un format 640x480 pour de bonnes performances
+        let preferredDepthFormat = depthFormats.first { format in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return dimensions.width == 640 && dimensions.height == 480
+        }
+        
+        return preferredDepthFormat ?? depthFormats.first
+    }
+    
+    private func configureSynchronizer() {
+        // Créer le synchronizer APRÈS que les outputs soient ajoutés à la session
+        if lidarAvailable {
+            outputSynchronizer = AVCaptureDataOutputSynchronizer(dataOutputs: [videoDataOutput, depthDataOutput])
+            outputSynchronizer?.setDelegate(self, queue: DispatchQueue(label: "sync.processing.queue"))
+            print("✅ Synchronizer configuré avec LiDAR")
+        } else {
+            // Mode sans LiDAR - utiliser seulement le delegate vidéo
+            videoDataOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "video.processing.queue"))
+            print("✅ Mode vidéo seule configuré (pas de LiDAR)")
         }
     }
 }
 
-// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+// MARK: - AVCaptureDataOutputSynchronizerDelegate (avec LiDAR)
+extension CameraManager: AVCaptureDataOutputSynchronizerDelegate {
+    func dataOutputSynchronizer(_ synchronizer: AVCaptureDataOutputSynchronizer,
+                               didOutput synchronizedDataCollection: AVCaptureSynchronizedDataCollection) {
+        
+        // Système de skip frames
+        frameCounter += 1
+        guard frameCounter % (skipFrameCount + 1) == 0 else { return }
+        
+        // Récupérer les données vidéo
+        guard let syncedVideoData = synchronizedDataCollection.synchronizedData(for: videoDataOutput) as? AVCaptureSynchronizedSampleBufferData,
+              !syncedVideoData.sampleBufferWasDropped,
+              let pixelBuffer = CMSampleBufferGetImageBuffer(syncedVideoData.sampleBuffer) else {
+            return
+        }
+        
+        // Récupérer les données de profondeur si disponibles
+        var depthData: AVDepthData?
+        if lidarAvailable && isLiDAREnabled,
+           let syncedDepthData = synchronizedDataCollection.synchronizedData(for: depthDataOutput) as? AVCaptureSynchronizedDepthData,
+           !syncedDepthData.depthDataWasDropped {
+            depthData = syncedDepthData.depthData
+            
+            // Traiter les données de profondeur
+            lidarManager.processDepthData(syncedDepthData.depthData)
+        }
+        
+        // Stocker pour utilisation dans les calculs de distance
+        lastImageBuffer = pixelBuffer
+        lastDepthData = depthData
+        
+        // Effectuer la détection d'objets avec données LiDAR
+        objectDetectionManager.detectObjectsWithLiDAR(
+            in: pixelBuffer,
+            depthData: depthData,
+            lidarManager: lidarManager,
+            imageSize: imageSize
+        ) { [weak self] detections, inferenceTime in
+            DispatchQueue.main.async {
+                self?.currentFPS = 1000.0 / inferenceTime
+                self?.delegate?.didDetectObjects(detections)
+            }
+        }
+    }
+}
+
+// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate (sans LiDAR)
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        
+        // Ne traiter que si pas de synchronizer (mode sans LiDAR)
+        guard outputSynchronizer == nil else { return }
         
         // Système de skip frames configurable
         frameCounter += 1
@@ -152,14 +328,19 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
-        // CORRECTION : Ajout du deuxième paramètre inferenceTime dans la closure
+        // Effectuer la détection d'objets sans LiDAR (méthode legacy)
         objectDetectionManager.detectObjects(in: pixelBuffer) { [weak self] detections, inferenceTime in
             DispatchQueue.main.async {
                 // Mettre à jour le FPS pour l'affichage
                 self?.currentFPS = 1000.0 / inferenceTime
                 
+                // Convertir au nouveau format avec distance nil
+                let detectionsWithDistance = detections.map {
+                    (rect: $0.rect, label: $0.label, confidence: $0.confidence, distance: nil as Float?)
+                }
+                
                 // Notifier le délégué des détections
-                self?.delegate?.didDetectObjects(detections)
+                self?.delegate?.didDetectObjects(detectionsWithDistance)
             }
         }
     }
