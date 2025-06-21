@@ -1,14 +1,62 @@
 //
-//  DetectionSettingsView.swift (Version avec contrôles de vibrations)
+//  DetectionSettingsView.swift (Version avec modes de performance)
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
-//  Updated with vibration controls - 19/06/2025
+//  Updated with vibration controls - 19/06/2025.
+//  Updated with performance modes - 21/06/2025
 //
 
 import SwiftUI
 
-struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
+// Énumération pour les modes de performance
+enum PerformanceMode: String, CaseIterable {
+    case eco = "eco"
+    case normal = "normal"
+    case rapide = "rapide"
+    
+    var skipFrames: Int {
+        switch self {
+        case .eco: return 7
+        case .normal: return 4
+        case .rapide: return 1
+        }
+    }
+    
+    var displayName: String {
+        switch self {
+        case .eco: return "Éco"
+        case .normal: return "Normal"
+        case .rapide: return "Rapide"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .eco: return "leaf.fill"
+        case .normal: return "speedometer"
+        case .rapide: return "bolt.fill"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .eco: return .green
+        case .normal: return .blue
+        case .rapide: return .orange
+        }
+    }
+    
+    var description: String {
+        switch self {
+        case .eco: return "Économise la batterie • Skip: 7 frames"
+        case .normal: return "Équilibre performance/batterie • Skip: 4 frames"
+        case .rapide: return "Performance maximale • Skip: 1 frame"
+        }
+    }
+}
+
+struct CameraDetectionSettingsView: View {
     @Binding var isPresented: Bool
     @ObservedObject var cameraManager: CameraManager
     
@@ -25,7 +73,7 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
     ].sorted()
     
     @State private var selectedClasses: Set<String> = []
-    @State private var skipFrames: Int = 1
+    @State private var currentPerformanceMode: PerformanceMode = .normal  // ← NOUVEAU
     @State private var searchText = ""
     
     // États pour les vibrations
@@ -56,8 +104,8 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
                 // Sections des paramètres
                 ScrollView {
                     VStack(spacing: 20) {
-                        // Configuration Skip Frames
-                        skipFramesSection
+                        // Configuration Modes de Performance (NOUVEAU)
+                        performanceModesSection
                         
                         Divider()
                         
@@ -96,6 +144,7 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
         }
         .onAppear {
             loadCurrentSettings()
+            print("🔄 Vue paramètres chargée - Mode: \(currentPerformanceMode.displayName)")
         }
     }
     
@@ -143,54 +192,87 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
                 Button("Tout sélectionner") {
                     selectedClasses = Set(allClasses)
                 }
-                .buttonStyle(CameraQuickActionButtonStyle(color: .blue))  // ← Renommé
+                .buttonStyle(CameraQuickActionButtonStyle(color: .blue))
                 
                 Button("Tout désélectionner") {
                     selectedClasses.removeAll()
                 }
-                .buttonStyle(CameraQuickActionButtonStyle(color: .red))  // ← Renommé
+                .buttonStyle(CameraQuickActionButtonStyle(color: .red))
                 
                 Button("Par défaut") {
                     resetToDefault()
                 }
-                .buttonStyle(CameraQuickActionButtonStyle(color: .orange))  // ← Renommé
+                .buttonStyle(CameraQuickActionButtonStyle(color: .orange))
             }
         }
         .padding()
         .background(Color(.systemGray6))
     }
     
-    // MARK: - Section Skip Frames
-    private var skipFramesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    // MARK: - Section Modes de Performance (NOUVEAU - Remplace skipFramesSection)
+    private var performanceModesSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("⚡ Performance")
+                Text("⚡ Modes de Performance")
                     .font(.headline)
                 
                 Spacer()
                 
-                Text("1 frame sur \(skipFrames + 1)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                HStack {
+                    Image(systemName: currentPerformanceMode.icon)
+                        .foregroundColor(currentPerformanceMode.color)
+                    Text(currentPerformanceMode.displayName)
+                        .fontWeight(.semibold)
+                        .foregroundColor(currentPerformanceMode.color)
+                }
             }
             
-            HStack {
-                Text("Performance")
-                    .font(.caption)
-                
-                Slider(value: Binding(
-                    get: { Double(skipFrames) },
-                    set: { skipFrames = Int($0) }
-                ), in: 0...10, step: 1)
-                
-                Text("Qualité")
-                    .font(.caption)
-            }
-            
-            Text("Valeur: \(skipFrames) - FPS estimé: ~\(String(format: "%.1f", 30.0 / Double(skipFrames + 1)))")
+            // Description du mode actuel
+            Text(currentPerformanceMode.description)
                 .font(.caption)
                 .foregroundColor(.secondary)
+                .multilineTextAlignment(.leading)
+            
+            // Boutons de sélection
+            HStack(spacing: 12) {
+                ForEach(PerformanceMode.allCases, id: \.self) { mode in
+                    PerformanceModeButton(
+                        mode: mode,
+                        isSelected: currentPerformanceMode == mode
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            currentPerformanceMode = mode
+                            updatePerformanceMode(mode)
+                        }
+                    }
+                }
+            }
+            
+            // Informations techniques
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Informations techniques:")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+                
+                Text("• Skip: \(currentPerformanceMode.skipFrames) frames (1 sur \(currentPerformanceMode.skipFrames + 1))")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                
+                Text("• FPS estimé: ~\(String(format: "%.1f", 30.0 / Double(currentPerformanceMode.skipFrames + 1)))")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                
+                Text("• Valeur moteur: \(cameraManager.getSkipFrames())")
+                    .font(.caption2)
+                    .foregroundColor(.blue)
+                    .fontWeight(.medium)
+            }
+            .padding(.top, 8)
         }
+        .padding()
+        .background(Color.blue.opacity(0.05))
+        .cornerRadius(12)
     }
     
     // MARK: - Section vibrations
@@ -502,7 +584,7 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
                     
                     // Classes de la catégorie
                     ForEach(groupedClasses[category] ?? [], id: \.self) { className in
-                        CameraClassRowView(  // ← Renommé
+                        CameraClassRowView(
                             className: className,
                             isSelected: selectedClasses.contains(className),
                             onToggle: { toggleClass(className) }
@@ -578,7 +660,7 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
         selectedClasses.remove("wall")
         selectedClasses.remove("fence")
         
-        skipFrames = 5
+        currentPerformanceMode = .normal  // ← MODIFIÉ
         
         // Réinitialisation des paramètres de vibration
         proximityAlertsEnabled = true
@@ -592,9 +674,25 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
         maxCooldown = 0.8
     }
     
+    // MARK: - Méthodes pour les modes de performance (NOUVEAU)
+    
+    private func updatePerformanceMode(_ mode: PerformanceMode) {
+        cameraManager.setSkipFrames(mode.skipFrames)
+        cameraManager.playSelectionFeedback()
+        print("🎛️ Mode de performance: \(mode.displayName) (skip: \(mode.skipFrames) frames)")
+    }
+    
+    private func loadCurrentPerformanceMode() {
+        let currentSkipFrames = cameraManager.getSkipFrames()
+        currentPerformanceMode = PerformanceMode.allCases.first { $0.skipFrames == currentSkipFrames } ?? .normal
+        print("🔄 Mode de performance chargé: \(currentPerformanceMode.displayName)")
+    }
+    
+    // ✅ MÉTHODE MODIFIÉE - Synchronisation avec les modes
     private func loadCurrentSettings() {
-        // Charger les paramètres de détection
-        skipFrames = cameraManager.getSkipFrames()
+        // Charger le mode de performance
+        loadCurrentPerformanceMode()
+        
         selectedClasses = Set(cameraManager.getActiveClasses())
         
         // Charger les paramètres de vibration
@@ -618,8 +716,8 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
     }
     
     private func saveSettings() {
-        // Sauvegarder les paramètres de détection
-        cameraManager.setSkipFrames(skipFrames)
+        // Sauvegarder le mode de performance
+        cameraManager.setSkipFrames(currentPerformanceMode.skipFrames)
         cameraManager.setActiveClasses(Array(selectedClasses))
         
         // Sauvegarder les paramètres de vibration
@@ -636,7 +734,7 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
         
         print("✅ Paramètres sauvegardés:")
         print("   - \(selectedClasses.count) classes actives")
-        print("   - Skip frames: \(skipFrames)")
+        print("   - Mode performance: \(currentPerformanceMode.displayName) (skip: \(currentPerformanceMode.skipFrames))")
         print("   - Alertes proximité: \(proximityAlertsEnabled)")
         print("   - Vibrations graduées: \(graduatedVibrationsEnabled)")
         print("   - Fréquence graduée: \(graduatedFrequencyEnabled)")
@@ -647,8 +745,45 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
     }
 }
 
-// MARK: - Vue pour chaque ligne de classe (Camera version)
-struct CameraClassRowView: View {  // ← Renommé pour éviter conflit
+// MARK: - Bouton de Mode de Performance (NOUVEAU)
+struct PerformanceModeButton: View {
+    let mode: PerformanceMode
+    let isSelected: Bool
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 8) {
+                Image(systemName: mode.icon)
+                    .font(.title2)
+                    .foregroundColor(isSelected ? .white : mode.color)
+                
+                Text(mode.displayName)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(isSelected ? .white : mode.color)
+                
+                Text("Skip: \(mode.skipFrames)")
+                    .font(.caption2)
+                    .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? mode.color : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(mode.color, lineWidth: isSelected ? 0 : 2)
+                    )
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - Vue pour chaque ligne de classe
+struct CameraClassRowView: View {
     let className: String
     let isSelected: Bool
     let onToggle: () -> Void
@@ -684,8 +819,8 @@ struct CameraClassRowView: View {  // ← Renommé pour éviter conflit
     }
 }
 
-// MARK: - Style pour les boutons d'action rapide (Camera version)
-struct CameraQuickActionButtonStyle: ButtonStyle {  // ← Renommé pour éviter conflit
+// MARK: - Style pour les boutons d'action rapide
+struct CameraQuickActionButtonStyle: ButtonStyle {
     let color: Color
     
     func makeBody(configuration: Configuration) -> some View {

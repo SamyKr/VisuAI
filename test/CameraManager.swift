@@ -37,7 +37,7 @@ class CameraManager: NSObject, ObservableObject {
     private let hapticManager = HapticManager()  // ← Manager pour les vibrations
     
     // Configuration des skip frames
-    private var skipFrameCount = 5
+    private var skipFrameCount = 1  
     private var frameCounter = 0
     
     // Variables pour la synchronisation des données
@@ -217,7 +217,14 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Statistics
+    // MARK: - Important Objects Ranking
+    func getTopImportantObjects(maxCount: Int = 5) -> [(object: TrackedObject, score: Float)] {
+        return objectDetectionManager.getTopImportantObjects(maxCount: maxCount)
+    }
+    
+    func getImportanceStats() -> String {
+        return objectDetectionManager.getImportanceStats()
+    }
     func getPerformanceStats() -> String {
         var stats = objectDetectionManager.getPerformanceStats()
         

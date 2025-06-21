@@ -4,6 +4,7 @@
 //
 //  Created by Samy 📍 on 20/06/2025.
 //  Object tracking system with color persistence
+//  Updated with importance system support - 21/06/2025
 //
 
 import Foundation
@@ -115,6 +116,33 @@ class ObjectTracker: ObservableObject {
         shortTermObjects = 0
         longTermObjects = 0
         print("🔄 ObjectTracker réinitialisé avec critère de durée de vie")
+    }
+    
+    /// Obtenir tous les objets trackés (pour le système d'importance)
+    func getAllTrackedObjects() -> [TrackedObject] {
+        return trackedObjects
+    }
+    
+    /// Obtenir seulement les objets actifs
+    func getActiveTrackedObjects() -> [TrackedObject] {
+        return trackedObjects.filter { $0.isActive }
+    }
+    
+    /// Obtenir seulement les objets en mémoire
+    func getMemoryTrackedObjects() -> [TrackedObject] {
+        return trackedObjects.filter { !$0.isActive }
+    }
+    
+    /// Obtenir un objet spécifique par son ID de tracking
+    func getTrackedObject(by trackingNumber: Int) -> TrackedObject? {
+        return trackedObjects.first { $0.trackingNumber == trackingNumber }
+    }
+    
+    /// Obtenir le nombre total d'objets trackés
+    func getTrackedObjectCount() -> (active: Int, memory: Int, total: Int) {
+        let active = trackedObjects.filter { $0.isActive }.count
+        let memory = trackedObjects.filter { !$0.isActive }.count
+        return (active: active, memory: memory, total: trackedObjects.count)
     }
     
     /// Obtenir les statistiques du tracker
