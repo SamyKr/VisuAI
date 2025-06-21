@@ -1,18 +1,19 @@
 //
-//  CameraManager.swift (Version avec LiDAR)
+//  CameraManager.swift (Version avec LiDAR + Tracking)
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
 //  Updated with LiDAR integration - 19/06/2025
+//  Updated with Object Tracking - 20/06/2025
 //
 
 import AVFoundation
 import Vision
 import SwiftUI
 
-// Mise à jour du protocole pour inclure la distance
+// Protocole mis à jour pour le tracking coloré avec LiDAR
 protocol CameraManagerDelegate {
-    func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?)])
+    func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))])
 }
 
 class CameraManager: NSObject, ObservableObject {
@@ -33,7 +34,7 @@ class CameraManager: NSObject, ObservableObject {
     
     private let objectDetectionManager = ObjectDetectionManager()
     private let lidarManager = LiDARManager()
-    private let hapticManager = HapticManager()  // ← Nouveau manager pour les vibrations
+    private let hapticManager = HapticManager()  // ← Manager pour les vibrations
     
     // Configuration des skip frames
     private var skipFrameCount = 5
@@ -52,7 +53,7 @@ class CameraManager: NSObject, ObservableObject {
         
         setupCaptureSession()
         
-        print("🎥 CameraManager initialisé")
+        print("🎥 CameraManager initialisé avec tracking")
         print("📏 LiDAR disponible: \(lidarAvailable ? "✅" : "❌")")
     }
     
@@ -97,6 +98,16 @@ class CameraManager: NSObject, ObservableObject {
             previewLayer?.videoGravity = .resizeAspectFill
         }
         return previewLayer!
+    }
+    
+    // MARK: - Tracking Controls
+    func resetTracking() {
+        objectDetectionManager.resetTracking()
+        print("🔄 Tracking réinitialisé")
+    }
+    
+    func getTrackingStats() -> String {
+        return objectDetectionManager.getTrackingStats()
     }
     
     // MARK: - Haptic Controls
@@ -171,6 +182,8 @@ class CameraManager: NSObject, ObservableObject {
     func testWarningVibration(intensity: Float = 0.7) {
         hapticManager.testWarningVibration(customIntensity: intensity)
     }
+    
+    // MARK: - LiDAR Controls
     func enableLiDAR() -> Bool {
         guard lidarAvailable else {
             print("❌ LiDAR non disponible")
@@ -375,7 +388,7 @@ extension CameraManager: AVCaptureDataOutputSynchronizerDelegate {
         lastImageBuffer = pixelBuffer
         lastDepthData = depthData
         
-        // Effectuer la détection d'objets avec données LiDAR
+        // Effectuer la détection d'objets avec données LiDAR et tracking
         objectDetectionManager.detectObjectsWithLiDAR(
             in: pixelBuffer,
             depthData: depthData,
@@ -386,7 +399,11 @@ extension CameraManager: AVCaptureDataOutputSynchronizerDelegate {
                 self?.currentFPS = 1000.0 / inferenceTime
                 
                 // Vérifier la proximité et déclencher les vibrations si nécessaire
-                self?.hapticManager.checkProximityAndAlert(detections: detections)
+                // Convertir les détections au format attendu par hapticManager (sans tracking info)
+                let proximityDetections = detections.map {
+                    (rect: $0.rect, label: $0.label, confidence: $0.confidence, distance: $0.distance)
+                }
+                self?.hapticManager.checkProximityAndAlert(detections: proximityDetections)
                 
                 self?.delegate?.didDetectObjects(detections)
             }
@@ -407,21 +424,17 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
-        // Effectuer la détection d'objets sans LiDAR (méthode legacy)
+        // Effectuer la détection d'objets sans LiDAR mais avec tracking
         objectDetectionManager.detectObjects(in: pixelBuffer) { [weak self] detections, inferenceTime in
             DispatchQueue.main.async {
                 // Mettre à jour le FPS pour l'affichage
                 self?.currentFPS = 1000.0 / inferenceTime
                 
-                // Convertir au nouveau format avec distance nil
-                let detectionsWithDistance = detections.map {
-                    (rect: $0.rect, label: $0.label, confidence: $0.confidence, distance: nil as Float?)
-                }
-                
                 // Pas de vérification de proximité sans LiDAR (distances non disponibles)
                 
-                // Notifier le délégué des détections
-                self?.delegate?.didDetectObjects(detectionsWithDistance)
+                // Notifier le délégué des détections avec tracking
+                // Note: detections ont déjà distance: nil car pas de LiDAR
+                self?.delegate?.didDetectObjects(detections)
             }
         }
     }

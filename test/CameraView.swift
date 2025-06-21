@@ -1,9 +1,10 @@
 //
-//  CameraView.swift (Version avec LiDAR)
+//  CameraView.swift (Version avec LiDAR + Tracking)
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
 //  Updated with LiDAR integration - 19/06/2025
+//  Updated with Object Tracking - 20/06/2025
 //
 
 import SwiftUI
@@ -34,7 +35,7 @@ struct CameraView: UIViewRepresentable {
 
 struct CameraViewWithDetection: View {
     @StateObject private var cameraManager = CameraManager()
-    @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float, distance: Float?)] = []
+    @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
     @State private var showingStats = false
     @State private var showingPermissionAlert = false
     @State private var showingSettings = false
@@ -61,16 +62,17 @@ struct CameraViewWithDetection: View {
                     cameraManager.stopSession()
                 }
             
-            // Overlay pour les bounding boxes avec distances
+            // Overlay pour les bounding boxes avec couleurs de tracking
             GeometryReader { geometry in
                 ForEach(boundingBoxes.indices, id: \.self) { index in
                     let detection = boundingBoxes[index]
                     let rect = detection.rect
+                    let tracking = detection.trackingInfo
                     
                     ZStack {
-                        // Bounding box avec couleur dynamique selon la distance
+                        // Bounding box avec couleur de tracking et opacité
                         Rectangle()
-                            .stroke(getBoundingBoxColor(for: detection.distance), lineWidth: 3)
+                            .stroke(Color(tracking.color).opacity(tracking.opacity), lineWidth: tracking.opacity > 0.5 ? 3 : 2)
                             .background(Color.clear)
                     }
                     .frame(
@@ -82,14 +84,14 @@ struct CameraViewWithDetection: View {
                         y: (1 - rect.midY) * geometry.size.height
                     )
                     
-                    // Labels avec confiance et distance
+                    // Labels avec tracking ID et couleur
                     detectionLabelsView(for: detection, geometry: geometry, rect: rect)
                 }
             }
             
-            // HUD avec métriques de performance et contrôles LiDAR
+            // HUD avec métriques de performance et contrôles LiDAR + Tracking
             VStack {
-                // Top HUD - Métriques en temps réel avec LiDAR
+                // Top HUD - Métriques en temps réel
                 topHUDView
                 
                 Spacer()
@@ -100,11 +102,11 @@ struct CameraViewWithDetection: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 
-                // Controls en bas avec LiDAR
+                // Controls en bas avec LiDAR et Tracking
                 bottomControlsView
             }
         }
-        .navigationTitle("Détection Temps Réel + LiDAR")
+        .navigationTitle("Détection + LiDAR + Tracking")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Permission Caméra", isPresented: $showingPermissionAlert) {
             Button("Paramètres") {
@@ -145,8 +147,23 @@ struct CameraViewWithDetection: View {
                     .font(.caption)
                     .fontWeight(.bold)
                 
-                Text("Objets: \(boundingBoxes.count)")
-                    .font(.caption)
+                // Compteur d'objets avec distinction actifs/mémoire
+                let activeObjects = boundingBoxes.filter { $0.trackingInfo.opacity > 0.5 }.count
+                let memoryObjects = boundingBoxes.filter { $0.trackingInfo.opacity <= 0.5 }.count
+                
+                HStack(spacing: 4) {
+                    Text("🎯")
+                        .font(.caption2)
+                    Text("\(activeObjects)")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.green)
+                    if memoryObjects > 0 {
+                        Text("+\(memoryObjects)")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+                }
                 
                 // Status LiDAR et vibrations
                 HStack(spacing: 4) {
@@ -181,7 +198,7 @@ struct CameraViewWithDetection: View {
             
             Spacer()
             
-            // Boutons de contrôle avec LiDAR
+            // Boutons de contrôle avec LiDAR et Tracking
             controlButtonsView
         }
         .padding(.horizontal)
@@ -190,6 +207,23 @@ struct CameraViewWithDetection: View {
     
     private var controlButtonsView: some View {
         HStack(spacing: 12) {
+            // Bouton reset tracking
+            Button(action: {
+                cameraManager.resetTracking()
+                cameraManager.playSuccessFeedback()
+            }) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.title2)
+                    .foregroundColor(.white)
+                    .padding(12)
+                    .background(Color.purple.opacity(0.8))
+                    .cornerRadius(12)
+            }
+            .onLongPressGesture {
+                // Afficher les stats de tracking
+                showingStats.toggle()
+            }
+            
             // Bouton LiDAR
             if cameraManager.lidarAvailable {
                 Button(action: {
@@ -268,9 +302,34 @@ struct CameraViewWithDetection: View {
             .background(Color.blue.opacity(0.7))
             .cornerRadius(8)
             
-            // Indicateurs compacts
-            if cameraManager.lidarAvailable {
-                HStack(spacing: 8) {
+            // Indicateurs compacts avec tracking
+            HStack(spacing: 8) {
+                // Indicateur tracking
+                HStack(spacing: 4) {
+                    Text("🎯")
+                        .font(.caption)
+                    
+                    let activeCount = boundingBoxes.filter { $0.trackingInfo.opacity > 0.5 }.count
+                    let memoryCount = boundingBoxes.filter { $0.trackingInfo.opacity <= 0.5 }.count
+                    
+                    Text("\(activeCount)")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.green)
+                    
+                    if memoryCount > 0 {
+                        Text("+\(memoryCount)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.orange)
+                    }
+                }
+                .padding(6)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(6)
+                
+                // Indicateurs LiDAR
+                if cameraManager.lidarAvailable {
                     // Indicateur LiDAR
                     HStack(spacing: 4) {
                         Image(systemName: "location.fill")
@@ -326,9 +385,19 @@ struct CameraViewWithDetection: View {
         .padding()
     }
     
-    // MARK: - Detection Labels View
-    private func detectionLabelsView(for detection: (rect: CGRect, label: String, confidence: Float, distance: Float?), geometry: GeometryProxy, rect: CGRect) -> some View {
+    // MARK: - Detection Labels View avec Tracking
+    private func detectionLabelsView(for detection: (rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double)), geometry: GeometryProxy, rect: CGRect) -> some View {
         HStack(spacing: 4) {
+            // ID de tracking avec couleur
+            Text("#\(detection.trackingInfo.id)")
+                .font(.caption)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color(detection.trackingInfo.color).opacity(detection.trackingInfo.opacity))
+                .cornerRadius(4)
+            
             // Label de l'objet
             Text(detection.label)
                 .font(.caption)
@@ -336,7 +405,7 @@ struct CameraViewWithDetection: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Color.red)
+                .background(Color(detection.trackingInfo.color).opacity(detection.trackingInfo.opacity * 0.8))
                 .cornerRadius(4)
             
             // Confiance
@@ -346,7 +415,7 @@ struct CameraViewWithDetection: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 4)
                 .padding(.vertical, 2)
-                .background(Color.red.opacity(0.8))
+                .background(Color(detection.trackingInfo.color).opacity(detection.trackingInfo.opacity * 0.6))
                 .cornerRadius(3)
             
             // Distance LiDAR si disponible
@@ -357,7 +426,7 @@ struct CameraViewWithDetection: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.9))
+                    .background(Color.blue.opacity(0.9 * detection.trackingInfo.opacity))
                     .cornerRadius(3)
             } else if cameraManager.isLiDAREnabled {
                 // Indicateur que la distance n'est pas disponible
@@ -367,8 +436,15 @@ struct CameraViewWithDetection: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 2)
-                    .background(Color.gray.opacity(0.6))
+                    .background(Color.gray.opacity(0.6 * detection.trackingInfo.opacity))
                     .cornerRadius(3)
+            }
+            
+            // Indicateur de statut (actif/mémoire)
+            if detection.trackingInfo.opacity <= 0.5 {
+                Text("👻")
+                    .font(.caption2)
+                    .opacity(0.7)
             }
         }
         .position(
@@ -391,23 +467,6 @@ struct CameraViewWithDetection: View {
         
         // Synchroniser l'état des alertes de proximité
         proximityAlertsEnabled = cameraManager.isProximityAlertsEnabled()
-    }
-    
-    private func getBoundingBoxColor(for distance: Float?) -> Color {
-        guard let distance = distance else {
-            return .red // Couleur par défaut sans LiDAR
-        }
-        
-        // Gradient de couleur basé sur la distance
-        if distance < 2.0 {
-            return .red // Très proche - rouge
-        } else if distance < 5.0 {
-            return .orange // Proche - orange
-        } else if distance < 10.0 {
-            return .yellow // Moyen - jaune
-        } else {
-            return .green // Loin - vert
-        }
     }
     
     private func getLiDARStatusColor() -> Color {
@@ -433,11 +492,16 @@ struct CameraViewWithDetection: View {
             return """
             LiDAR activé! Les distances sont affichées en bleu à côté de la confiance. 
             
-            🎨 Les couleurs des bounding boxes indiquent la distance (rouge = proche, vert = loin).
+            🎨 Les bounding boxes utilisent les couleurs de tracking pour identifier les objets de manière persistante.
             
             📳 Alertes de proximité \(alertsStatus):
             • Vibrations si objet < \(String(format: "%.1f", dangerDist))m
             • Touchez l'icône 🔔 pour activer/désactiver
+            
+            🎯 Tracking d'objets:
+            • Chaque objet a un ID unique (#1, #2, etc.)
+            • Couleur persistante même si temporairement perdu
+            • Objets fantômes (👻) = en mémoire 3s
             """
         } else {
             return """
@@ -447,6 +511,8 @@ struct CameraViewWithDetection: View {
             • Affichage des distances en temps réel
             • Alertes de proximité par vibration
             • Bounding boxes colorées selon la distance
+            
+            🎯 Le tracking fonctionne sans LiDAR avec des couleurs persistantes par objet.
             """
         }
     }
@@ -462,20 +528,20 @@ struct CameraViewWithDetection: View {
     }
 }
 
-// Delegate pour gérer les détections avec distances LiDAR
+// Delegate pour gérer les détections avec tracking et LiDAR
 class CameraDetectionDelegate: CameraManagerDelegate {
-    let onDetections: ([(rect: CGRect, label: String, confidence: Float, distance: Float?)]) -> Void
+    let onDetections: ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))]) -> Void
     
-    init(onDetections: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?)]) -> Void) {
+    init(onDetections: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))]) -> Void) {
         self.onDetections = onDetections
     }
     
-    func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?)]) {
+    func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))]) {
         onDetections(detections)
     }
 }
 
-// Vue pour afficher les statistiques détaillées avec LiDAR
+// Vue pour afficher les statistiques détaillées avec LiDAR et Tracking
 struct PerformanceStatsView: View {
     let cameraManager: CameraManager
     @State private var statsText = ""

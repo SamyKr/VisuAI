@@ -14,6 +14,9 @@ class ObjectDetectionManager {
     private var ignoredClasses = Set(["building", "vegetation", "road", "sidewalk", "ground", "wall", "fence"])
     private var activeClasses: Set<String> = []
     
+    // Système de tracking intégré
+    private let objectTracker = ObjectTracker()
+    
     // Statistiques de performance
     private var inferenceHistory: [Double] = []
     private let maxHistorySize = 100
@@ -47,8 +50,8 @@ class ObjectDetectionManager {
         }
     }
     
-    // MARK: - Detection Methods (Legacy)
-    func detectObjects(in image: UIImage, completion: @escaping ([(rect: CGRect, label: String, confidence: Float)], Double) -> Void) {
+    // MARK: - Detection Methods (Legacy) - Updated for tracking
+    func detectObjects(in image: UIImage, completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))], Double) -> Void) {
         guard let model = model else {
             print("❌ Modèle non chargé")
             completion([], 0.0)
@@ -62,13 +65,11 @@ class ObjectDetectionManager {
         }
         
         performDetection(on: ciImage, with: model) { detections, inferenceTime in
-            // Convertir au format legacy (sans distance)
-            let legacyDetections = detections.map { (rect: $0.rect, label: $0.label, confidence: $0.confidence) }
-            completion(legacyDetections, inferenceTime)
+            completion(detections, inferenceTime)
         }
     }
     
-    func detectObjects(in pixelBuffer: CVPixelBuffer, completion: @escaping ([(rect: CGRect, label: String, confidence: Float)], Double) -> Void) {
+    func detectObjects(in pixelBuffer: CVPixelBuffer, completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))], Double) -> Void) {
         guard let model = model else {
             print("❌ Modèle non chargé")
             completion([], 0.0)
@@ -80,19 +81,17 @@ class ObjectDetectionManager {
         let preprocessTime = (CFAbsoluteTimeGetCurrent() - preprocessStart) * 1000
         
         performDetection(on: ciImage, with: model, preprocessTime: preprocessTime) { detections, inferenceTime in
-            // Convertir au format legacy (sans distance)
-            let legacyDetections = detections.map { (rect: $0.rect, label: $0.label, confidence: $0.confidence) }
-            completion(legacyDetections, inferenceTime)
+            completion(detections, inferenceTime)
         }
     }
     
-    // MARK: - New LiDAR-Enhanced Detection Method
+    // MARK: - New LiDAR-Enhanced Detection Method with Tracking
     func detectObjectsWithLiDAR(
         in pixelBuffer: CVPixelBuffer,
         depthData: AVDepthData?,
         lidarManager: LiDARManager,
         imageSize: CGSize,
-        completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?)], Double) -> Void
+        completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))], Double) -> Void
     ) {
         guard let model = model else {
             print("❌ Modèle non chargé")
@@ -104,7 +103,7 @@ class ObjectDetectionManager {
         let ciImage = preprocessPixelBuffer(pixelBuffer)
         let preprocessTime = (CFAbsoluteTimeGetCurrent() - preprocessStart) * 1000
         
-        performDetectionWithLiDAR(
+        performDetectionWithLiDARAndTracking(
             on: ciImage,
             with: model,
             depthData: depthData,
@@ -127,12 +126,12 @@ class ObjectDetectionManager {
             ])
     }
     
-    // MARK: - Legacy Detection (without LiDAR)
+    // MARK: - Legacy Detection (without LiDAR) with Tracking
     private func performDetection(
         on ciImage: CIImage,
         with model: VNCoreMLModel,
         preprocessTime: Double = 0.0,
-        completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?)], Double) -> Void
+        completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))], Double) -> Void
     ) {
         let totalStartTime = CFAbsoluteTimeGetCurrent()
         
@@ -152,23 +151,29 @@ class ObjectDetectionManager {
             }
             
             let postProcessStart = CFAbsoluteTimeGetCurrent()
-            let detections = self.processDetectionsWithoutLiDAR(results)
+            
+            // Traitement des détections brutes (sans LiDAR, donc distance = nil)
+            let rawDetections = self.processRawDetections(results)
+            
+            // Application du tracking
+            let trackedDetections = self.objectTracker.processDetections(rawDetections)
+            
             let postProcessTime = (CFAbsoluteTimeGetCurrent() - postProcessStart) * 1000
             
             self.updateInferenceStats(totalInferenceTime)
             
             self.printDetectionStats(
-                detections: detections,
+                detections: trackedDetections,
                 totalTime: totalInferenceTime,
                 preprocessTime: preprocessTime,
                 postProcessTime: postProcessTime,
                 withLiDAR: false
             )
             
-            completion(detections, totalInferenceTime)
+            completion(trackedDetections, totalInferenceTime)
         }
         
-        request.imageCropAndScaleOption = .scaleFill
+        request.imageCropAndScaleOption = VNImageCropAndScaleOption.scaleFill
         
         do {
             let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
@@ -180,15 +185,15 @@ class ObjectDetectionManager {
         }
     }
     
-    // MARK: - LiDAR-Enhanced Detection
-    private func performDetectionWithLiDAR(
+    // MARK: - LiDAR-Enhanced Detection with Tracking
+    private func performDetectionWithLiDARAndTracking(
         on ciImage: CIImage,
         with model: VNCoreMLModel,
         depthData: AVDepthData?,
         lidarManager: LiDARManager,
         imageSize: CGSize,
         preprocessTime: Double = 0.0,
-        completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?)], Double) -> Void
+        completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))], Double) -> Void
     ) {
         let totalStartTime = CFAbsoluteTimeGetCurrent()
         
@@ -208,27 +213,33 @@ class ObjectDetectionManager {
             }
             
             let postProcessStart = CFAbsoluteTimeGetCurrent()
-            let detections = self.processDetectionsWithLiDAR(
+            
+            // Traitement des détections avec LiDAR
+            let rawDetections = self.processDetectionsWithLiDAR(
                 results,
                 lidarManager: lidarManager,
                 imageSize: imageSize
             )
+            
+            // Application du tracking
+            let trackedDetections = self.objectTracker.processDetections(rawDetections)
+            
             let postProcessTime = (CFAbsoluteTimeGetCurrent() - postProcessStart) * 1000
             
             self.updateInferenceStats(totalInferenceTime)
             
             self.printDetectionStats(
-                detections: detections,
+                detections: trackedDetections,
                 totalTime: totalInferenceTime,
                 preprocessTime: preprocessTime,
                 postProcessTime: postProcessTime,
                 withLiDAR: lidarManager.isEnabled()
             )
             
-            completion(detections, totalInferenceTime)
+            completion(trackedDetections, totalInferenceTime)
         }
         
-        request.imageCropAndScaleOption = .scaleFill
+        request.imageCropAndScaleOption = VNImageCropAndScaleOption.scaleFill
         
         do {
             let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
@@ -240,8 +251,8 @@ class ObjectDetectionManager {
         }
     }
     
-    // MARK: - Detection Processing
-    private func processDetectionsWithoutLiDAR(_ results: [VNRecognizedObjectObservation]) -> [(rect: CGRect, label: String, confidence: Float, distance: Float?)] {
+    // MARK: - Detection Processing (Raw detections without tracking)
+    private func processRawDetections(_ results: [VNRecognizedObjectObservation]) -> [(rect: CGRect, label: String, confidence: Float, distance: Float?)] {
         let filteredResults = results.filter { $0.confidence >= confidenceThreshold }
         let sortedResults = filteredResults.sorted { $0.confidence > $1.confidence }
         let limitedResults = Array(sortedResults.prefix(maxDetections))
@@ -318,7 +329,7 @@ class ObjectDetectionManager {
     }
     
     private func printDetectionStats(
-        detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?)],
+        detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))],
         totalTime: Double,
         preprocessTime: Double,
         postProcessTime: Double,
@@ -326,13 +337,13 @@ class ObjectDetectionManager {
     ) {
         let pureInferenceTime = totalTime - postProcessTime - preprocessTime
         
-        print("🎯 YOLOv11\(withLiDAR ? " + LiDAR" : ""): \(detections.count) objets détectés avec confiance > \(confidenceThreshold)")
+        print("🎯 YOLOv11\(withLiDAR ? " + LiDAR" : "") + Tracking: \(detections.count) objets détectés")
         print("⏱️ Temps d'exécution:")
         if preprocessTime > 0 {
             print("   - Préprocessing: \(String(format: "%.1f", preprocessTime))ms")
         }
         print("   - Inférence pure: \(String(format: "%.1f", pureInferenceTime))ms")
-        print("   - Post-processing: \(String(format: "%.1f", postProcessTime))ms")
+        print("   - Post-processing + Tracking: \(String(format: "%.1f", postProcessTime))ms")
         print("   - TOTAL: \(String(format: "%.1f", totalTime))ms")
         print("   - FPS estimé: \(String(format: "%.1f", 1000.0 / totalTime))")
         
@@ -346,11 +357,15 @@ class ObjectDetectionManager {
             print("📏 LiDAR: \(successfulDistanceMeasurements)/\(totalDistanceMeasurements) mesures réussies (\(String(format: "%.1f", successRate))%)")
         }
         
+        // Afficher les objets avec ID de tracking
         for detection in detections {
-            var output = "   - \(detection.label): \(String(format: "%.1f", detection.confidence * 100))%"
+            var output = "   - #\(detection.trackingInfo.id) \(detection.label): \(String(format: "%.1f", detection.confidence * 100))%"
             if let distance = detection.distance {
                 let lidar = LiDARManager()
                 output += " à \(lidar.formatDistance(distance))"
+            }
+            if detection.trackingInfo.opacity < 1.0 {
+                output += " (mémoire)"
             }
             print(output)
         }
@@ -402,6 +417,9 @@ class ObjectDetectionManager {
             }
         }
         
+        // Ajouter les statistiques de tracking
+        stats += "\n\n" + objectTracker.getTrackingStats()
+        
         return stats
     }
     
@@ -410,7 +428,18 @@ class ObjectDetectionManager {
         lidarDistanceHistory.removeAll()
         successfulDistanceMeasurements = 0
         totalDistanceMeasurements = 0
-        print("📊 Statistiques de performance réinitialisées")
+        objectTracker.resetStats()
+        print("📊 Statistiques de performance et tracking réinitialisées")
+    }
+    
+    // MARK: - Tracking Controls
+    
+    func resetTracking() {
+        objectTracker.reset()
+    }
+    
+    func getTrackingStats() -> String {
+        return objectTracker.getDetailedStats()
     }
     
     // MARK: - Class Management

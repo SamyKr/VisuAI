@@ -25,7 +25,7 @@ struct CameraDetectionSettingsView: View {  // ← Renommé pour éviter conflit
     ].sorted()
     
     @State private var selectedClasses: Set<String> = []
-    @State private var skipFrames: Int = 5
+    @State private var skipFrames: Int = 1
     @State private var searchText = ""
     
     // États pour les vibrations

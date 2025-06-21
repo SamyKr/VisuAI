@@ -3,6 +3,7 @@
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
+//  Updated with color tracking - 20/06/2025
 //
 
 import Foundation
@@ -19,7 +20,8 @@ struct ProcessingStats {
 }
 
 class VideoDetectionManager: ObservableObject {
-    @Published var currentDetections: [(rect: CGRect, label: String, confidence: Float)] = []
+    // Mise à jour avec le nouveau format de tracking
+    @Published var currentDetections: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
     @Published var processingStats = ProcessingStats(processedFrames: 0, totalFrames: 0, progress: 0.0, averageInferenceTime: 0.0)
     
     private let objectDetectionManager = ObjectDetectionManager()
@@ -28,8 +30,8 @@ class VideoDetectionManager: ObservableObject {
     private var isProcessing = false
     private var processingQueue = DispatchQueue(label: "video.processing.queue", qos: .userInitiated)
     
-    // Stockage des détections par timestamp
-    private var detectionsByTime: [Double: [(rect: CGRect, label: String, confidence: Float)]] = [:]
+    // Stockage des détections par timestamp - format mis à jour
+    private var detectionsByTime: [Double: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))]] = [:]
     private var processedTimestamps: Set<Double> = []
     
     // Configuration
@@ -119,6 +121,7 @@ class VideoDetectionManager: ObservableObject {
         }
         
         print("🎬 Traitement de \(framesToProcess) frames sur \(totalFrames) (\(skipFrames + 1) skip)")
+        print("🎨 Tracking coloré activé pour les vidéos")
         
         // Traitement des frames
         var processedCount = 0
@@ -155,7 +158,7 @@ class VideoDetectionManager: ObservableObject {
                 // Mesure du temps d'inférence
                 let startTime = CFAbsoluteTimeGetCurrent()
                 
-                // Détection synchrone pour le traitement vidéo
+                // Détection synchrone pour le traitement vidéo avec tracking
                 self.performSyncDetection(on: ciImage, originalSize: CGSize(width: nativeWidth, height: nativeHeight)) { detections in
                     let inferenceTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
                     self.inferenceHistory.append(inferenceTime)
@@ -188,7 +191,9 @@ class VideoDetectionManager: ObservableObject {
                     }
                     
                     if processedCount % 10 == 0 {
-                        print("📊 Traité: \(processedCount)/\(framesToProcess) frames - Avg: \(String(format: "%.1f", self.getAverageInferenceTime()))ms - Détections: \(detections.count)")
+                        let activeObjects = detections.filter { $0.trackingInfo.opacity > 0.5 }.count
+                        let memoryObjects = detections.filter { $0.trackingInfo.opacity <= 0.5 }.count
+                        print("📊 Traité: \(processedCount)/\(framesToProcess) frames - Avg: \(String(format: "%.1f", self.getAverageInferenceTime()))ms - Objets: \(activeObjects) + \(memoryObjects) mémoire")
                     }
                 }
             }
@@ -200,15 +205,16 @@ class VideoDetectionManager: ObservableObject {
         // Attendre que toutes les détections soient terminées
         group.notify(queue: DispatchQueue.main) {
             self.isProcessing = false
-            print("✅ Traitement vidéo terminé: \(processedCount) frames traitées")
+            print("✅ Traitement vidéo terminé: \(processedCount) frames traitées avec tracking coloré")
             completion(true)
         }
     }
     
-    private func performSyncDetection(on ciImage: CIImage, originalSize: CGSize, completion: @escaping ([(rect: CGRect, label: String, confidence: Float)]) -> Void) {
-        // Version synchrone de la détection pour le traitement vidéo
+    // Mise à jour de la signature pour le nouveau format avec tracking
+    private func performSyncDetection(on ciImage: CIImage, originalSize: CGSize, completion: @escaping ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))]) -> Void) {
+        // Version synchrone de la détection pour le traitement vidéo avec tracking
         let semaphore = DispatchSemaphore(value: 0)
-        var result: [(rect: CGRect, label: String, confidence: Float)] = []
+        var result: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
         
         // Convertir CIImage en UIImage de manière plus robuste
         let context = CIContext()
@@ -221,7 +227,7 @@ class VideoDetectionManager: ObservableObject {
         
         let uiImage = UIImage(cgImage: cgImage)
         
-        // SOLUTION TEMPORAIRE : Utiliser la méthode existante mais adapter les coordonnées
+        // Utiliser la nouvelle méthode avec tracking (pas de LiDAR pour les vidéos, donc distance = nil)
         objectDetectionManager.detectObjects(in: uiImage) { detections, _ in
             // Convertir les coordonnées du modèle (640x640) vers la taille native de la vidéo
             let convertedDetections = self.convertDetectionsToNativeSize(detections,
@@ -235,10 +241,10 @@ class VideoDetectionManager: ObservableObject {
         completion(result)
     }
     
-    // Convertit les coordonnées des détections du modèle vers la taille native
-    private func convertDetectionsToNativeSize(_ detections: [(rect: CGRect, label: String, confidence: Float)],
+    // Convertit les coordonnées des détections du modèle vers la taille native - Mise à jour pour le tracking
+    private func convertDetectionsToNativeSize(_ detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))],
                                                originalSize: CGSize,
-                                               modelSize: CGSize) -> [(rect: CGRect, label: String, confidence: Float)] {
+                                               modelSize: CGSize) -> [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] {
         
         // Le modèle utilise 640x640 avec aspect ratio préservé
         let scaleX = modelSize.width / originalSize.width
@@ -280,7 +286,7 @@ class VideoDetectionManager: ObservableObject {
             rect.size.width = max(0, min(1 - rect.origin.x, rect.size.width))
             rect.size.height = max(0, min(1 - rect.origin.y, rect.size.height))
             
-            return (rect: rect, label: detection.label, confidence: detection.confidence)
+            return (rect: rect, label: detection.label, confidence: detection.confidence, distance: detection.distance, trackingInfo: detection.trackingInfo)
         }
     }
     
@@ -295,6 +301,10 @@ class VideoDetectionManager: ObservableObject {
         totalFrameCount = 0
         detectionsByTime.removeAll()
         processedTimestamps.removeAll()
+        
+        // Reset du tracking pour les nouvelles vidéos
+        objectDetectionManager.resetTracking()
+        
         DispatchQueue.main.async {
             self.processingStats = ProcessingStats(
                 processedFrames: 0,
@@ -325,6 +335,11 @@ class VideoDetectionManager: ObservableObject {
         return objectDetectionManager.getActiveClasses()
     }
     
+    func resetTracking() {
+        objectDetectionManager.resetTracking()
+        print("🔄 Tracking vidéo réinitialisé")
+    }
+    
     func getPerformanceStats() -> String {
         guard !inferenceHistory.isEmpty else {
             return "📊 Aucune statistique vidéo disponible"
@@ -339,7 +354,10 @@ class VideoDetectionManager: ObservableObject {
         stats += "   - Temps moyen: \(String(format: "%.1f", avg))ms/frame\n"
         stats += "   - Temps min: \(String(format: "%.1f", min))ms\n"
         stats += "   - Temps max: \(String(format: "%.1f", max))ms\n"
-        stats += "   - Skip frames: \(skipFrames)"
+        stats += "   - Skip frames: \(skipFrames)\n"
+        
+        // Ajouter les stats de tracking
+        stats += "\n" + objectDetectionManager.getTrackingStats()
         
         return stats
     }
@@ -348,9 +366,9 @@ class VideoDetectionManager: ObservableObject {
         return currentPlayer
     }
     
-    // MARK: - Détections en temps réel pendant la lecture
+    // MARK: - Détections en temps réel pendant la lecture (Mise à jour avec tracking)
     
-    func getDetectionsForTime(_ time: Double) -> [(rect: CGRect, label: String, confidence: Float)] {
+    func getDetectionsForTime(_ time: Double) -> [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] {
         // Trouver le timestamp le plus proche qui a été traité
         let tolerance = 0.5 // Tolérance de 0.5 secondes
         

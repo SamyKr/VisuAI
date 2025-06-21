@@ -3,6 +3,7 @@
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
+//  Updated with color tracking - 20/06/2025
 //
 
 import SwiftUI
@@ -14,7 +15,8 @@ struct VideoDetectionView: View {
     @State private var selectedVideoURL: URL?
     @State private var isPickerPresented = false
     @State private var isProcessing = false
-    @State private var detections: [(rect: CGRect, label: String, confidence: Float)] = []
+    // Mise à jour du type pour inclure le tracking
+    @State private var detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
     @State private var showingSettings = false
     
     // Video player
@@ -43,7 +45,7 @@ struct VideoDetectionView: View {
             
             Spacer()
         }
-        .navigationTitle("Détection sur Vidéo")
+        .navigationTitle("Détection Vidéo + Tracking")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -86,14 +88,15 @@ struct VideoDetectionView: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .background(Color.black)
                 
-                // Overlay des détections avec les mêmes dimensions
+                // Overlay des détections avec tracking coloré
                 ForEach(detections.indices, id: \.self) { index in
                     let detection = detections[index]
                     let rect = detection.rect
+                    let tracking = detection.trackingInfo
                     
                     ZStack {
                         Rectangle()
-                            .stroke(Color.green, lineWidth: 2)
+                            .stroke(Color(tracking.color).opacity(tracking.opacity), lineWidth: tracking.opacity > 0.5 ? 3 : 2)
                             .background(Color.clear)
                     }
                     .frame(
@@ -105,29 +108,47 @@ struct VideoDetectionView: View {
                         y: (1 - rect.midY) * geometry.size.height
                     )
                     
-                    // Label
+                    // Labels avec tracking ID et couleur
                     HStack(spacing: 4) {
+                        // ID de tracking avec couleur
+                        Text("#\(tracking.id)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color(tracking.color).opacity(tracking.opacity))
+                            .cornerRadius(3)
+                        
+                        // Label de l'objet
                         Text(detection.label)
                             .font(.caption2)
                             .fontWeight(.bold)
                             .foregroundColor(.white)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(Color.green)
+                            .background(Color(tracking.color).opacity(tracking.opacity * 0.8))
                             .cornerRadius(3)
                         
+                        // Confiance
                         Text("\(String(format: "%.0f", detection.confidence * 100))%")
                             .font(.caption2)
                             .fontWeight(.bold)
                             .foregroundColor(.white)
                             .padding(.horizontal, 3)
                             .padding(.vertical, 1)
-                            .background(Color.green.opacity(0.8))
+                            .background(Color(tracking.color).opacity(tracking.opacity * 0.6))
                             .cornerRadius(2)
+                        
+                        // Indicateur de statut (actif/mémoire)
+                        if tracking.opacity <= 0.5 {
+                            Text("👻")
+                                .font(.caption2)
+                        }
                     }
                     .position(
                         x: rect.midX * geometry.size.width,
-                        y: (1 - rect.maxY) * geometry.size.height - 8
+                        y: (1 - rect.maxY) * geometry.size.height - 12
                     )
                 }
                 
@@ -136,7 +157,7 @@ struct VideoDetectionView: View {
                     processingOverlayView
                 }
                 
-                // HUD avec stats
+                // HUD avec stats et tracking
                 videoHUDView
             }
         }
@@ -147,15 +168,27 @@ struct VideoDetectionView: View {
     @ViewBuilder
     private var videoSelectionSection: some View {
         VStack(spacing: 30) {
-            Image(systemName: "video.badge.plus")
-                .font(.system(size: 80))
-                .foregroundColor(.purple)
+            HStack(spacing: 16) {
+                Image(systemName: "video.badge.plus")
+                    .font(.system(size: 60))
+                    .foregroundColor(.purple)
+                
+                VStack {
+                    Image(systemName: "target")
+                        .font(.system(size: 20))
+                        .foregroundColor(.purple)
+                    Text("Tracking")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.purple)
+                }
+            }
             
             Text("Sélectionner une vidéo")
                 .font(.title2)
                 .fontWeight(.bold)
             
-            Text("Choisissez une vidéo depuis votre galerie pour y appliquer la détection d'objets")
+            Text("Choisissez une vidéo depuis votre galerie pour y appliquer la détection d'objets avec tracking coloré persistant")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -180,14 +213,14 @@ struct VideoDetectionView: View {
                     HStack {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
-                        Text("Accès direct à votre galerie")
+                        Text("Tracking coloré persistant")
                             .font(.caption)
                     }
                     
                     HStack {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
-                        Text("Tous formats vidéo supportés")
+                        Text("IDs uniques par objet")
                             .font(.caption)
                     }
                     
@@ -195,6 +228,13 @@ struct VideoDetectionView: View {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
                         Text("Traitement optimisé")
+                            .font(.caption)
+                    }
+                    
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Mémoire d'objets (3s)")
                             .font(.caption)
                     }
                 }
@@ -207,7 +247,7 @@ struct VideoDetectionView: View {
         .padding()
     }
     
-    // MARK: - Video HUD
+    // MARK: - Video HUD avec tracking
     @ViewBuilder
     private var videoHUDView: some View {
         VStack {
@@ -224,9 +264,24 @@ struct VideoDetectionView: View {
                             .foregroundColor(.white)
                     }
                     
-                    Text("Objets: \(detections.count)")
-                        .font(.caption)
-                        .foregroundColor(.white)
+                    // Compteur d'objets avec distinction actifs/mémoire
+                    let activeObjects = detections.filter { $0.trackingInfo.opacity > 0.5 }.count
+                    let memoryObjects = detections.filter { $0.trackingInfo.opacity <= 0.5 }.count
+                    
+                    HStack(spacing: 4) {
+                        Text("🎯")
+                            .font(.caption)
+                        Text("\(activeObjects)")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.green)
+                        if memoryObjects > 0 {
+                            Text("+\(memoryObjects)")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    .foregroundColor(.white)
                     
                     if isProcessing {
                         Text("Frame: \(processedFrames)/\(totalFrames)")
@@ -245,6 +300,20 @@ struct VideoDetectionView: View {
                 .cornerRadius(8)
                 
                 Spacer()
+                
+                // Bouton reset tracking
+                if !detections.isEmpty {
+                    Button(action: {
+                        videoManager.resetTracking()
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.title2)
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(Color.purple.opacity(0.8))
+                            .cornerRadius(8)
+                    }
+                }
             }
             .padding()
             
@@ -263,13 +332,22 @@ struct VideoDetectionView: View {
                     .progressViewStyle(LinearProgressViewStyle(tint: .blue))
                     .frame(width: 200)
                 
-                Text("Traitement en cours...")
+                Text("Traitement avec tracking...")
                     .font(.headline)
                     .foregroundColor(.white)
                 
-                Text("\(processedFrames)/\(totalFrames) frames")
-                    .font(.caption)
-                    .foregroundColor(.white)
+                HStack {
+                    Text("\(processedFrames)/\(totalFrames) frames")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                    
+                    if processedFrames > 0 {
+                        let activeCount = detections.filter { $0.trackingInfo.opacity > 0.5 }.count
+                        Text("• \(activeCount) objets trackés")
+                            .font(.caption)
+                            .foregroundColor(.purple)
+                    }
+                }
                 
                 if averageInferenceTime > 0 {
                     Text("Temps moyen: \(String(format: "%.1f", averageInferenceTime))ms/frame")
@@ -287,7 +365,7 @@ struct VideoDetectionView: View {
         }
     }
     
-    // MARK: - Video Controls
+    // MARK: - Video Controls avec tracking
     @ViewBuilder
     private var videoControlsSection: some View {
         VStack(spacing: 12) {
@@ -310,6 +388,11 @@ struct VideoDetectionView: View {
                         .foregroundColor(.secondary)
                 }
                 .padding(.horizontal)
+            }
+            
+            // Panneau des objets trackés (si détections disponibles)
+            if !detections.isEmpty {
+                trackingPanelView
             }
             
             // Control buttons
@@ -339,7 +422,7 @@ struct VideoDetectionView: View {
                         } else {
                             Image(systemName: "brain")
                         }
-                        Text(isProcessing ? "Traitement..." : "Détecter")
+                        Text(isProcessing ? "Traitement..." : "Détecter + Track")
                     }
                     .font(.headline)
                     .foregroundColor(.white)
@@ -353,6 +436,52 @@ struct VideoDetectionView: View {
             .padding()
         }
         .background(Color(.systemGray6))
+    }
+    
+    // MARK: - Panneau de tracking
+    @ViewBuilder
+    private var trackingPanelView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("🎨 Objets trackés (\(detections.count)):")
+                .font(.caption)
+                .fontWeight(.bold)
+            
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 4) {
+                ForEach(detections.indices, id: \.self) { index in
+                    let detection = detections[index]
+                    let tracking = detection.trackingInfo
+                    
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color(tracking.color))
+                            .frame(width: 8, height: 8)
+                            .opacity(tracking.opacity)
+                        
+                        Text("#\(tracking.id)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(Color(tracking.color))
+                        
+                        Text(detection.label)
+                            .font(.caption2)
+                            .lineLimit(1)
+                        
+                        if tracking.opacity <= 0.5 {
+                            Text("👻")
+                                .font(.caption2)
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color(tracking.color).opacity(0.1))
+                    .cornerRadius(4)
+                }
+            }
+        }
+        .padding(8)
+        .background(Color.gray.opacity(0.05))
+        .cornerRadius(8)
+        .padding(.horizontal)
     }
     
     // MARK: - Methods
@@ -395,7 +524,7 @@ struct VideoDetectionView: View {
             DispatchQueue.main.async {
                 isProcessing = false
                 if completed {
-                    print("✅ Traitement vidéo terminé")
+                    print("✅ Traitement vidéo avec tracking terminé")
                 }
             }
         }

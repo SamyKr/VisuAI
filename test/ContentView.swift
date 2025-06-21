@@ -20,6 +20,10 @@ struct ContentView: View {
                             Text("Détecter sur image")
                                 .font(.headline)
                                 .foregroundColor(.blue)
+                            Text("+ Tracking coloré")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.purple)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(30)
@@ -59,22 +63,40 @@ struct ContentView: View {
                                         .fontWeight(.bold)
                                         .foregroundColor(.blue)
                                 }
+                                
+                                // Indicateur tracking
+                                VStack {
+                                    Image(systemName: "target")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(.purple)
+                                    Text("Track")
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.purple)
+                                }
                             }
                             
                             Text("Détecter en temps réel")
                                 .font(.headline)
                                 .foregroundColor(.green)
                             
-                            Text("+ Distances LiDAR")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .foregroundColor(.blue)
+                            HStack {
+                                Text("+ Distances LiDAR")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.blue)
+                                
+                                Text("+ Tracking coloré")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.purple)
+                            }
                         }
                         .frame(maxWidth: .infinity)
                         .padding(30)
                         .background(
                             LinearGradient(
-                                gradient: Gradient(colors: [Color.green.opacity(0.1), Color.blue.opacity(0.05)]),
+                                gradient: Gradient(colors: [Color.green.opacity(0.1), Color.blue.opacity(0.05), Color.purple.opacity(0.05)]),
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
@@ -113,11 +135,23 @@ struct LiDARAvailabilityView: View {
                 Text("LiDAR \(lidarAvailable ? "disponible" : "non disponible")")
                     .font(.caption)
                     .fontWeight(.medium)
+                
+                Spacer()
+                
+                // Indicateur tracking toujours disponible
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.purple)
+                    Text("Tracking")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.purple)
+                }
             }
             
             Text(lidarAvailable ?
-                 "Les distances seront affichées en temps réel" :
-                 "Compatible iPhone 12 Pro+ / iPad Pro 2020+")
+                 "Distances + tracking coloré disponibles en temps réel" :
+                 "Tracking coloré disponible • LiDAR: iPhone 12 Pro+ / iPad Pro 2020+")
                 .font(.caption2)
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
@@ -138,7 +172,7 @@ struct LiDARAvailabilityView: View {
 
 struct ImageDetectionView: View {
     @State private var image: UIImage? = UIImage(named: "street")
-    @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float)] = []
+    @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
     @State private var isDetecting = false
     @State private var inferenceTime: Double = 0.0
     @State private var showingLiDARNote = false
@@ -156,10 +190,11 @@ struct ImageDetectionView: View {
                             ForEach(boundingBoxes.indices, id: \.self) { index in
                                 let detection = boundingBoxes[index]
                                 let rect = detection.rect
+                                let tracking = detection.trackingInfo
                                 
                                 VStack {
                                     Rectangle()
-                                        .stroke(Color.red, lineWidth: 2)
+                                        .stroke(Color(tracking.color), lineWidth: 3)
                                         .frame(
                                             width: rect.width * geometry.size.width,
                                             height: rect.height * geometry.size.height
@@ -169,15 +204,31 @@ struct ImageDetectionView: View {
                                             y: (1 - rect.midY) * geometry.size.height
                                         )
                                     
-                                    Text("\(detection.label) (\(String(format: "%.1f", detection.confidence * 100))%)")
-                                        .font(.caption)
-                                        .foregroundColor(.red)
-                                        .background(Color.white.opacity(0.8))
-                                        .cornerRadius(4)
-                                        .position(
-                                            x: rect.midX * geometry.size.width,
-                                            y: (1 - rect.maxY) * geometry.size.height - 10
-                                        )
+                                    HStack(spacing: 4) {
+                                        // ID de tracking avec couleur
+                                        Text("#\(tracking.id)")
+                                            .font(.caption2)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 1)
+                                            .background(Color(tracking.color))
+                                            .cornerRadius(3)
+                                        
+                                        // Label et confiance
+                                        Text("\(detection.label) (\(String(format: "%.1f", detection.confidence * 100))%)")
+                                            .font(.caption)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color(tracking.color).opacity(0.8))
+                                            .cornerRadius(4)
+                                    }
+                                    .position(
+                                        x: rect.midX * geometry.size.width,
+                                        y: (1 - rect.maxY) * geometry.size.height - 15
+                                    )
                                 }
                             }
                         }
@@ -213,8 +264,8 @@ struct ImageDetectionView: View {
                 
                 // Affichage des résultats avec métriques de performance
                 if !boundingBoxes.isEmpty {
-                    VStack(spacing: 5) {
-                        Text("\(boundingBoxes.count) objets détectés")
+                    VStack(spacing: 8) {
+                        Text("\(boundingBoxes.count) objets détectés avec tracking")
                             .font(.headline)
                             .foregroundColor(.primary)
                         
@@ -238,11 +289,58 @@ struct ImageDetectionView: View {
                                     .fontWeight(.bold)
                                     .foregroundColor(.green)
                             }
+                            
+                            VStack {
+                                Text("🎨 IDs uniques")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Text("\(boundingBoxes.count)")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.purple)
+                            }
                         }
                         .padding(8)
                         .background(Color.gray.opacity(0.1))
                         .cornerRadius(8)
                     }
+                }
+                
+                // Affichage des objets détectés avec leurs couleurs
+                if !boundingBoxes.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("🎨 Objets trackés:")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                        
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 6) {
+                            ForEach(boundingBoxes.indices, id: \.self) { index in
+                                let detection = boundingBoxes[index]
+                                
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(Color(detection.trackingInfo.color))
+                                        .frame(width: 10, height: 10)
+                                    
+                                    Text("#\(detection.trackingInfo.id)")
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(Color(detection.trackingInfo.color))
+                                    
+                                    Text(detection.label)
+                                        .font(.caption2)
+                                        .lineLimit(1)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color(detection.trackingInfo.color).opacity(0.1))
+                                .cornerRadius(6)
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(Color.gray.opacity(0.05))
+                    .cornerRadius(10)
                 }
                 
                 // Bouton pour afficher les statistiques détaillées
@@ -252,12 +350,19 @@ struct ImageDetectionView: View {
                     }
                     .font(.caption)
                     .foregroundColor(.blue)
+                    
+                    Button("🔄 Réinitialiser tracking") {
+                        objectDetectionManager.resetTracking()
+                        detectObjects() // Re-détecter avec nouveaux IDs
+                    }
+                    .font(.caption)
+                    .foregroundColor(.purple)
                 }
             }
             .padding()
         }
         .padding()
-        .navigationTitle("Détection sur image")
+        .navigationTitle("Détection sur image + Tracking")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             detectObjects()
@@ -278,9 +383,9 @@ struct ImageDetectionView: View {
                 self.inferenceTime = detectionTime
                 self.isDetecting = false
                 
-                print("YOLOv11 a détecté \(detections.count) objets en \(String(format: "%.1f", detectionTime))ms")
+                print("🎯 YOLOv11 + Tracking: \(detections.count) objets détectés en \(String(format: "%.1f", detectionTime))ms")
                 for detection in detections {
-                    print("- \(detection.label): \(String(format: "%.1f", detection.confidence * 100))%")
+                    print("- #\(detection.trackingInfo.id) \(detection.label): \(String(format: "%.1f", detection.confidence * 100))% (distance: \(detection.distance != nil ? String(format: "%.1f", detection.distance!) + "m" : "N/A"))")
                 }
             }
         }
@@ -297,14 +402,14 @@ struct LiDARImageNoteView: View {
                 .foregroundColor(.blue)
             
             VStack(alignment: .leading, spacing: 2) {
-                Text("Distances LiDAR")
+                Text("Tracking + LiDAR")
                     .font(.caption)
                     .fontWeight(.bold)
                     .foregroundColor(.primary)
                 
                 Text(lidarAvailable ?
-                     "Disponible uniquement en mode temps réel" :
-                     "Nécessite un appareil compatible LiDAR")
+                     "🎨 Tracking coloré: ✅ • 📏 Distances LiDAR: temps réel uniquement" :
+                     "🎨 Tracking coloré: ✅ • 📏 LiDAR: appareil compatible requis")
                     .font(.caption2)
                     .foregroundColor(.gray)
             }
@@ -313,7 +418,7 @@ struct LiDARImageNoteView: View {
             
             if lidarAvailable {
                 NavigationLink(destination: CameraViewWithDetection()) {
-                    Text("Essayer")
+                    Text("Temps réel")
                         .font(.caption)
                         .fontWeight(.bold)
                         .foregroundColor(.blue)
