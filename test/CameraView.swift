@@ -1,11 +1,12 @@
 //
-//  CameraView.swift (Version avec LiDAR + Tracking + ImportantObjectsBoard)
+//  CameraView.swift (Version avec LiDAR + Tracking + ImportantObjectsBoard + VoiceSynthesis)
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
 //  Updated with LiDAR integration - 19/06/2025
 //  Updated with Object Tracking - 20/06/2025
 //  Updated with ImportantObjectsBoard - 21/06/2025
+//  Updated with VoiceSynthesis - 02/07/2025
 //
 
 import SwiftUI
@@ -36,6 +37,7 @@ struct CameraView: UIViewRepresentable {
 
 struct CameraViewWithDetection: View {
     @StateObject private var cameraManager = CameraManager()
+    @StateObject private var voiceSynthesisManager = VoiceSynthesisManager() // ← NOUVEAU
     @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
     @State private var showingStats = false
     @State private var showingPermissionAlert = false
@@ -54,12 +56,24 @@ struct CameraViewWithDetection: View {
     @State private var showingInitialConfiguration = false
     @State private var hasConfiguredInitially = false
     
+    // NOUVEAU : États pour la synthèse vocale
+    @State private var voiceEnabled = true
+    @State private var showingVoiceStats = false
+    
     var body: some View {
         ZStack {
             CameraView(cameraManager: cameraManager)
                 .onAppear {
                     setupCameraManager()
                     startImportantObjectsTimer()
+                    
+                    // ← NOUVEAU : Test audio temporaire
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                        if voiceEnabled {
+                            voiceSynthesisManager.speak("Système de synthèse vocale activé")
+                        }
+                    }
+                    
                     if cameraManager.hasPermission {
                         cameraManager.startSession()
                     } else {
@@ -79,6 +93,7 @@ struct CameraViewWithDetection: View {
                 .onDisappear {
                     cameraManager.stopSession()
                     stopImportantObjectsTimer()
+                    voiceSynthesisManager.stopSpeaking() // ← NOUVEAU
                 }
             
             // Overlay pour les bounding boxes avec couleurs de tracking
@@ -108,7 +123,7 @@ struct CameraViewWithDetection: View {
                 }
             }
             
-            // HUD avec métriques de performance et contrôles LiDAR + Tracking
+            // HUD avec métriques de performance et contrôles LiDAR + Tracking + Voice
             VStack {
                 // Top HUD - Métriques en temps réel
                 topHUDView
@@ -118,6 +133,12 @@ struct CameraViewWithDetection: View {
                 // Panneau de statistiques détaillées
                 if showingStats {
                     PerformanceStatsView(cameraManager: cameraManager)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                
+                // ← NOUVEAU : Panneau de statistiques vocales
+                if showingVoiceStats {
+                    VoiceStatsView(voiceSynthesisManager: voiceSynthesisManager)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 
@@ -148,7 +169,7 @@ struct CameraViewWithDetection: View {
                 Spacer()
             }
         }
-        .navigationTitle("Détection + LiDAR + Tracking")
+        .navigationTitle("Détection + LiDAR + Tracking + Voice")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Permission Caméra", isPresented: $showingPermissionAlert) {
             Button("Paramètres") {
@@ -178,6 +199,7 @@ struct CameraViewWithDetection: View {
         }
         .animation(.easeInOut(duration: 0.3), value: showingStats)
         .animation(.easeInOut(duration: 0.3), value: showingImportantObjects)
+        .animation(.easeInOut(duration: 0.3), value: showingVoiceStats) // ← NOUVEAU
     }
     
     // MARK: - View Components
@@ -231,6 +253,19 @@ struct CameraViewWithDetection: View {
                     }
                 }
                 
+                // ← NOUVEAU : Status synthèse vocale
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(voiceEnabled ? .blue : .gray)
+                        .frame(width: 6, height: 6)
+                    Text("🗣️")
+                        .font(.caption2)
+                    Text(voiceEnabled ? "ON" : "OFF")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(voiceEnabled ? .blue : .gray)
+                }
+                
                 // Status LiDAR et vibrations
                 HStack(spacing: 4) {
                     Circle()
@@ -264,7 +299,7 @@ struct CameraViewWithDetection: View {
             
             Spacer()
             
-            // Boutons de contrôle avec LiDAR et Tracking
+            // Boutons de contrôle avec LiDAR et Tracking et Voice
             controlButtonsView
         }
         .padding(.horizontal)
@@ -273,9 +308,29 @@ struct CameraViewWithDetection: View {
     
     private var controlButtonsView: some View {
         HStack(spacing: 12) {
+            // ← NOUVEAU : Bouton synthèse vocale
+            Button(action: {
+                voiceEnabled.toggle()
+                if !voiceEnabled {
+                    voiceSynthesisManager.stopSpeaking()
+                }
+                cameraManager.playSelectionFeedback()
+            }) {
+                Image(systemName: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.title2)
+                    .foregroundColor(voiceEnabled ? .blue : .gray)
+                    .padding(12)
+                    .background(Color.black.opacity(0.6))
+                    .cornerRadius(12)
+            }
+            .onLongPressGesture {
+                showingVoiceStats.toggle()
+            }
+            
             // Bouton reset tracking
             Button(action: {
                 cameraManager.resetTracking()
+                voiceSynthesisManager.clearAllState() // ← MODIFIÉ : Nettoyage complet
                 cameraManager.playSuccessFeedback()
                 // Réinitialiser aussi le leaderboard
                 importantObjects.removeAll()
@@ -363,6 +418,7 @@ struct CameraViewWithDetection: View {
         HStack {
             Button("Reset Stats") {
                 cameraManager.resetPerformanceStats()
+                voiceSynthesisManager.clearAllState() // ← MODIFIÉ : Nettoyage complet
                 // Réinitialiser aussi le leaderboard
                 importantObjects.removeAll()
             }
@@ -372,10 +428,24 @@ struct CameraViewWithDetection: View {
             .background(Color.blue.opacity(0.7))
             .cornerRadius(8)
             
+            // ← NOUVEAU : Bouton test vocal
+            Button("Test Audio") {
+                if voiceEnabled {
+                    voiceSynthesisManager.speak("Test de synthèse vocale fonctionnel")
+                }
+            }
+            .font(.caption)
+            .foregroundColor(.white)
+            .padding(8)
+            .background(Color.green.opacity(0.7))
+            .cornerRadius(8)
+            .disabled(!voiceEnabled)
+            
             Button("Reset Config") {
                 hasConfiguredInitially = false
                 showingInitialConfiguration = true
                 cameraManager.stopSession()
+                voiceSynthesisManager.stopSpeaking() // ← NOUVEAU
             }
             .font(.caption)
             .foregroundColor(.white)
@@ -429,6 +499,23 @@ struct CameraViewWithDetection: View {
                     }
                 }
                 
+                // ← NOUVEAU : Indicateur synthèse vocale
+                HStack(spacing: 4) {
+                    Text("🗣️")
+                        .font(.caption)
+                    
+                    Text(voiceEnabled ? "ON" : "OFF")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundColor(voiceEnabled ? .blue : .gray)
+                }
+                .padding(6)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(6)
+                .onTapGesture {
+                    showingVoiceStats.toggle()
+                }
+                
                 // Indicateurs LiDAR
                 if cameraManager.lidarAvailable {
                     // Indicateur LiDAR
@@ -469,6 +556,7 @@ struct CameraViewWithDetection: View {
             Button(cameraManager.isRunning ? "Stop" : "Start") {
                 if cameraManager.isRunning {
                     cameraManager.stopSession()
+                    voiceSynthesisManager.stopSpeaking() // ← NOUVEAU
                 } else {
                     if cameraManager.hasPermission {
                         cameraManager.startSession()
@@ -589,9 +677,15 @@ struct CameraViewWithDetection: View {
         importantObjectsTimer = nil
     }
     
+    // ← MODIFIÉ : Ajout de la synthèse vocale
     private func updateImportantObjects() {
         // Récupérer les objets importants du CameraManager
-        let newImportantObjects = cameraManager.getTopImportantObjects(maxCount: 5)
+        let newImportantObjects = cameraManager.getTopImportantObjects(maxCount: 15)
+        
+        // ← NOUVEAU : Appeler la synthèse vocale si activée
+        if voiceEnabled && !newImportantObjects.isEmpty {
+            voiceSynthesisManager.processImportantObjects(newImportantObjects)
+        }
         
         // Mettre à jour seulement si il y a des changements significatifs
         if !areImportantObjectsEqual(newImportantObjects, importantObjects) {
@@ -658,6 +752,11 @@ struct CameraViewWithDetection: View {
             • Les objets avec un score d'importance élevé apparaissent dans le leaderboard
             • Touchez le bouton 'Top' pour voir le classement
             • Les objets VIP sont marqués d'un 🏆 sur les bounding boxes
+            
+            🗣️ Synthèse Vocale:
+            • Annonces automatiques des objets importants
+            • Touchez l'icône 🔊 pour activer/désactiver
+            • Fréquence intelligente pour éviter la surcharge
             """
         } else {
             return """
@@ -671,6 +770,8 @@ struct CameraViewWithDetection: View {
             🎯 Le tracking fonctionne sans LiDAR avec des couleurs persistantes par objet.
             
             🏆 Le leaderboard des objets importants fonctionne avec ou sans LiDAR.
+            
+            🗣️ La synthèse vocale fonctionne avec ou sans LiDAR.
             """
         }
     }
@@ -725,6 +826,35 @@ struct PerformanceStatsView: View {
     
     private func updateStats() {
         statsText = cameraManager.getPerformanceStats()
+    }
+}
+
+// ← NOUVELLE : Vue pour afficher les statistiques vocales
+struct VoiceStatsView: View {
+    let voiceSynthesisManager: VoiceSynthesisManager
+    @State private var statsText = ""
+    
+    var body: some View {
+        ScrollView {
+            Text(statsText)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.white)
+                .padding()
+                .background(Color.orange.opacity(0.8))
+                .cornerRadius(12)
+        }
+        .frame(maxHeight: 150)
+        .padding(.horizontal)
+        .onAppear {
+            updateStats()
+        }
+        .onReceive(Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()) { _ in
+            updateStats()
+        }
+    }
+    
+    private func updateStats() {
+        statsText = voiceSynthesisManager.getStats()
     }
 }
 
@@ -1025,4 +1155,3 @@ struct ConfigurationOptionView: View {
         .opacity(isAvailable ? 1.0 : 0.6)
     }
 }
-
