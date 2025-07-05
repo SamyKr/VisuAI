@@ -1,21 +1,16 @@
 //
-//  CameraView.swift (Version Optimisée - HUD Compact)
+//  DetectionView.swift
 //  test
 //
-//  Created by Samy 📍 on 18/06/2025.
-//  Updated with LiDAR integration - 19/06/2025
-//  Updated with Object Tracking - 20/06/2025
-//  Updated with ImportantObjectsBoard - 21/06/2025
-//  Updated with VoiceSynthesis - 02/07/2025
-//  Updated with VoiceInteraction - 02/07/2025 (ERREURS CORRIGÉES)
-//  Optimized UI - 03/07/2025
+//  Created by Samy 📍 on 04/07/2025.
 //
 
 import SwiftUI
 import AVFoundation
 import Speech
 
-struct CameraView: UIViewRepresentable {
+// MARK: - CameraView UIViewRepresentable
+struct CameraPreviewView: UIViewRepresentable {
     let cameraManager: CameraManager
     
     func makeUIView(context: Context) -> UIView {
@@ -38,7 +33,7 @@ struct CameraView: UIViewRepresentable {
     }
 }
 
-struct CameraViewWithDetection: View {
+struct DetectionView: View {
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var voiceSynthesisManager = VoiceSynthesisManager()
     @StateObject private var voiceInteractionManager = VoiceInteractionManager()
@@ -71,7 +66,7 @@ struct CameraViewWithDetection: View {
     
     var body: some View {
         ZStack {
-            CameraView(cameraManager: cameraManager)
+            CameraPreviewView(cameraManager: cameraManager)
                 .onAppear {
                     setupManagers()
                     startImportantObjectsTimer()
@@ -509,8 +504,6 @@ struct CameraViewWithDetection: View {
                 } else {
                     if cameraManager.hasPermission {
                         cameraManager.startSession()
-                        
-                        // L'utilisateur activera manuellement l'interaction vocale
                     } else {
                         showingPermissionAlert = true
                     }
@@ -591,7 +584,7 @@ struct CameraViewWithDetection: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
     
-    // MARK: - Detection Labels View (inchangé)
+    // MARK: - Detection Labels View
     private func detectionLabelsView(for detection: (rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double)), geometry: GeometryProxy, rect: CGRect) -> some View {
         HStack(spacing: 4) {
             Text("#\(detection.trackingInfo.id)")
@@ -658,7 +651,7 @@ struct CameraViewWithDetection: View {
         )
     }
     
-    // MARK: - Setup Methods (inchangé)
+    // MARK: - Setup Methods
     
     private func setupManagers() {
         cameraManager.delegate = CameraDetectionDelegate { newDetections in
@@ -671,11 +664,9 @@ struct CameraViewWithDetection: View {
         
         proximityAlertsEnabled = cameraManager.isProximityAlertsEnabled()
         voiceInteractionManager.setVoiceSynthesisManager(voiceSynthesisManager)
-        
-        // Plus d'activation automatique - l'utilisateur contrôle manuellement
     }
     
-    // MARK: - Timer Management (inchangé)
+    // MARK: - Timer Management
     
     private func startImportantObjectsTimer() {
         importantObjectsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
@@ -703,7 +694,7 @@ struct CameraViewWithDetection: View {
         }
     }
     
-    // MARK: - Helper Methods pour interaction vocale (inchangé)
+    // MARK: - Helper Methods pour interaction vocale
     
     private func getInteractionStatusColor() -> Color {
         if !voiceInteractionEnabled { return .gray }
@@ -713,15 +704,7 @@ struct CameraViewWithDetection: View {
         return .orange
     }
     
-    private func getInteractionButtonColor() -> Color {
-        if !voiceInteractionEnabled { return .gray }
-        if !voiceInteractionManager.interactionEnabled { return .red }
-        if voiceInteractionManager.isListening { return .green }
-        if voiceInteractionManager.isReadyForQuestion() { return .blue }
-        return .orange
-    }
-    
-    // MARK: - Helper Methods existantes (inchangées)
+    // MARK: - Helper Methods existantes
     
     private func areImportantObjectsEqual(
         _ list1: [(object: TrackedObject, score: Float)],
@@ -749,7 +732,7 @@ struct CameraViewWithDetection: View {
             let dangerDist = cameraManager.getDangerDistance()
             let alertsStatus = proximityAlertsEnabled ? "activées" : "désactivées"
             return """
-            LiDAR activé! Les distances sont affichées en bleu à côté de la confiance. 
+            LiDAR activé! Les distances sont affichées en bleu à côté de la confiance.
             
             🎨 Les bounding boxes utilisent les couleurs de tracking pour identifier les objets de manière persistante.
             
@@ -780,7 +763,7 @@ struct CameraViewWithDetection: View {
             """
         } else {
             return """
-            LiDAR disponible mais désactivé. 
+            LiDAR disponible mais désactivé.
             
             Touchez l'icône de localisation 📍 pour l'activer et bénéficier de:
             • Affichage des distances en temps réel
@@ -809,7 +792,7 @@ struct CameraViewWithDetection: View {
     }
 }
 
-// MARK: - Delegate (inchangé)
+// MARK: - Delegate
 class CameraDetectionDelegate: CameraManagerDelegate {
     let onDetections: ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))]) -> Void
     
@@ -822,7 +805,8 @@ class CameraDetectionDelegate: CameraManagerDelegate {
     }
 }
 
-// MARK: - Vue de statistiques consolidée
+// MARK: - Vues supplémentaires
+
 struct PerformanceStatsView: View {
     let cameraManager: CameraManager
     let voiceSynthesisManager: VoiceSynthesisManager
@@ -938,7 +922,10 @@ struct VoiceListeningIndicator: View {
     }
 }
 
-// MARK: - Configuration Initiale (inchangé)
+
+
+// MARK: - Configuration Initiale
+
 struct InitialConfigurationView: View {
     @Binding var isPresented: Bool
     @Binding var hasConfiguredInitially: Bool
@@ -1062,8 +1049,6 @@ struct InitialConfigurationView: View {
         cameraManager.playSuccessFeedback()
         cameraManager.startSession()
         
-        // Plus d'activation automatique de l'interaction vocale
-        
         print("✅ Configuration initiale appliquée:")
         print("   - LiDAR: \(enableLiDAR ? "✅" : "❌")")
         print("   - Vibrations: \(enableVibrations ? "✅" : "❌")")
@@ -1125,5 +1110,38 @@ struct ConfigurationOptionView: View {
                 .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
         )
         .opacity(isAvailable ? 1.0 : 0.6)
+    }
+}
+
+// MARK: - Settings View (placeholder - tu peux garder l'existante si tu en as une)
+
+struct CameraDetectionSettingsView: View {
+    @Binding var isPresented: Bool
+    let cameraManager: CameraManager
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                Text("Paramètres de détection")
+                    .font(.title)
+                    .padding()
+                
+                Text("Ici tu peux ajouter tes réglages personnalisés")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .padding()
+                
+                Spacer()
+            }
+            .navigationTitle("Paramètres")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Fermer") {
+                        isPresented = false
+                    }
+                }
+            }
+        }
     }
 }

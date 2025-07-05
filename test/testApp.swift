@@ -8,10 +8,10 @@
 import SwiftUI
 
 @main
-struct testApp: App {
+struct VizAiApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            MainAppView() // Utilise MainAppView au lieu de ContentView
         }
     }
 }
