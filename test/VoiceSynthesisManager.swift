@@ -1,17 +1,17 @@
 //
-//  VoiceSynthesisManager.swift
+//  VoiceSynthesisManager.swift (Version modifiée avec support interaction)
 //  test
 //
-//  Created by Assistant on 02/07/2025.
+//  Created by Samy 📍 on 02/07/2025.
 //  Système de synthèse vocale pour piétons aveugles
-//  Version finale corrigée - Diversité + Anti-répétition
+//  Version finale corrigée - Diversité + Anti-répétition + Interaction vocale
 //
 
 import Foundation
 import AVFoundation
 import UIKit
 
-// MARK: - Enums et Structures
+// MARK: - Enums et Structures (inchangés)
 
 enum DistanceZone {
     case critical   // < 2m
@@ -105,7 +105,7 @@ struct ContextualState {
     var navigationCount: Int = 0
 }
 
-// MARK: - VoiceSynthesisManager
+// MARK: - VoiceSynthesisManager (Version modifiée)
 
 class VoiceSynthesisManager: NSObject, ObservableObject {
     
@@ -125,11 +125,17 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
     private var recentlyAnnouncedTypes: [String] = []
     private var periodicAnnouncementsEnabled = true
     
+    // ← NOUVEAU : Support pour interaction vocale
+    @Published var isInterrupted = false
+    private var interruptionReason: String = ""
+    private var lastInterruptionTime: Date = Date.distantPast
+    private let interruptionCooldown: TimeInterval = 1.0
+    
     // MARK: - Synthèse vocale
     private let speechSynthesizer = AVSpeechSynthesizer()
     private var isCurrentlySpeaking = false
     
-    // MARK: - Dictionnaire de traduction
+    // MARK: - Dictionnaire de traduction (inchangé)
     private let translationDictionary: [String: String] = [
         "person": "personne", "cyclist": "cycliste", "motorcyclist": "motocycliste",
         "car": "voiture", "truck": "camion", "bus": "bus", "motorcycle": "moto", "bicycle": "vélo",
@@ -138,7 +144,7 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         "curb": "bordure de trottoir", "pothole": "nid-de-poule", "animals": "animal"
     ]
     
-    // MARK: - Templates de phrases
+    // MARK: - Templates de phrases (inchangés)
     private let voiceTemplates: [String: VoiceTemplate] = [
         "person": VoiceTemplate(
             critical: "ATTENTION ! Personne très proche {direction} !",
@@ -170,22 +176,193 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         super.init()
         speechSynthesizer.delegate = self
         setupAudioSession()
-        print("🗣️ VoiceSynthesisManager initialisé")
+        print("🗣️ VoiceSynthesisManager initialisé avec support interaction")
     }
     
     private func setupAudioSession() {
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers])
+            
+            // ✅ NOUVELLE CONFIGURATION : Privilégier AirPods pour la synthèse vocale
+            try audioSession.setCategory(
+                .playback,
+                mode: .spokenAudio,            // ← CHANGÉ : .spokenAudio au lieu de .voicePrompt
+                options: [
+                    .duckOthers,
+                    .allowBluetooth,           // ← NOUVEAU : Autoriser Bluetooth
+                    .allowBluetoothA2DP,       // ← NOUVEAU : Autoriser AirPods
+                    .allowAirPlay,             // ← NOUVEAU : Autoriser AirPlay
+                    .interruptSpokenAudioAndMixWithOthers  // ← NOUVEAU : Meilleure gestion interruptions
+                ]
+            )
+            
             try audioSession.setActive(true)
-            print("✅ Session audio configurée")
+            
+            // ✅ NOUVEAU : S'assurer que la route n'est PAS forcée vers le haut-parleur
+            try audioSession.overrideOutputAudioPort(.none) // Laisser le système choisir (AirPods prioritaires)
+            
+            print("✅ Session audio configurée - Synthèse via AirPods")
+            
+            // 🔍 Debug : Vérifier la route actuelle
+            checkCurrentAudioRoute()
+            
         } catch {
             print("❌ Erreur configuration audio: \(error)")
         }
     }
+    private func forceAirPodsOutput() {
+        let audioSession = AVAudioSession.sharedInstance()
+        
+        // Chercher des AirPods/Bluetooth dans les sorties disponibles
+        let hasBluetoothOutput = audioSession.currentRoute.outputs.contains { output in
+            output.portType == .bluetoothA2DP || output.portType == .bluetoothHFP
+        }
+        
+        if hasBluetoothOutput {
+            // ✅ AirPods détectés → Laisser le système utiliser les AirPods
+            do {
+                try audioSession.overrideOutputAudioPort(.none) // Utiliser AirPods
+                print("✅ AirPods actifs - Route automatique")
+            } catch {
+                print("❌ Erreur configuration AirPods: \(error)")
+            }
+        } else {
+            // ⚠️ Pas d'AirPods → Forcer vers les HAUT-PARLEURS (pas l'écouteur interne)
+            do {
+                try audioSession.overrideOutputAudioPort(.speaker) // ← FORCER HAUT-PARLEURS
+                print("🔊 Pas d'AirPods - Forçage vers haut-parleurs")
+            } catch {
+                print("❌ Erreur forçage haut-parleurs: \(error)")
+            }
+        }
+    }
+
+    // ✅ NOUVELLE MÉTHODE : Vérifier la route audio actuelle
+    private func checkCurrentAudioRoute() {
+        let audioSession = AVAudioSession.sharedInstance()
+        let outputs = audioSession.currentRoute.outputs
+        
+        print("🎧 Route audio actuelle :")
+        for output in outputs {
+            print("  - \(output.portName) (\(output.portType.rawValue))")
+            
+            switch output.portType {
+            case .bluetoothA2DP:
+                print("    ✅ AirPods/Casque Bluetooth A2DP")
+            case .bluetoothHFP:
+                print("    ✅ AirPods/Casque Bluetooth HFP")
+            case .builtInSpeaker:
+                print("    ⚠️ Haut-parleur interne (pas souhaité)")
+            case .builtInReceiver:
+                print("    ⚠️ Écouteur interne (pas souhaité)")
+            case .headphones:
+                print("    ✅ Casque filaire")
+            default:
+                print("    ℹ️ Autre type: \(output.portType.rawValue)")
+            }
+        }
+    }
+
+
+    // MARK: - Nouvelles méthodes pour interaction vocale
     
-    // MARK: - Interface principale
+    /// Interrompt immédiatement la synthèse pour permettre l'interaction
+    func interruptForInteraction(reason: String = "Interaction utilisateur") {
+        let currentTime = Date()
+        
+        // Éviter les interruptions trop fréquentes
+        guard currentTime.timeIntervalSince(lastInterruptionTime) >= interruptionCooldown else {
+            print("⏸️ Interruption ignorée - cooldown actif")
+            return
+        }
+        
+        print("🛑 Interruption pour interaction: \(reason)")
+        
+        isInterrupted = true
+        interruptionReason = reason
+        lastInterruptionTime = currentTime
+        
+        // Arrêter immédiatement la synthèse
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        
+        // Vider la queue des messages non critiques
+        let criticalMessages = messageQueue.filter { $0.priority >= 9 }
+        messageQueue = criticalMessages
+        
+        // Notifications
+        isCurrentlySpeaking = false
+        
+        print("📢 Synthèse interrompue, \(messageQueue.count) messages critiques conservés")
+    }
+    
+    /// Reprend les annonces automatiques après interaction
+    func resumeAfterInteraction() {
+        guard isInterrupted else { return }
+        
+        print("▶️ Reprise des annonces automatiques")
+        isInterrupted = false
+        interruptionReason = ""
+        
+        // Reprendre le traitement de la queue si nécessaire
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.processMessageQueue()
+        }
+    }
+    
+    /// Méthode pour parler directement (priorité interaction)
+    func speakInteraction(_ text: String, priority: Int = 15) {
+        let interactionMessage = VoiceMessage(
+            text: text,
+            priority: priority,
+            objectId: -999, // ID spécial pour interaction
+            timestamp: Date(),
+            changeType: .contextShift
+        )
+        
+        // Insérer en priorité dans la queue
+        messageQueue.insert(interactionMessage, at: 0)
+        
+        // Si on n'est pas en train de parler, traiter immédiatement
+        if !isCurrentlySpeaking {
+            processMessageQueue()
+        }
+        
+        print("🎤 Message d'interaction ajouté: '\(text)'")
+    }
+    
+    /// Méthode speak améliorée pour gérer les interruptions
+    func speak(_ text: String) {
+        // Si on est interrompu, utiliser la méthode d'interaction
+        if isInterrupted {
+            speakInteraction(text)
+            return
+        }
+        
+        // Utilisation normale
+        speakInternal(text)
+    }
+    
+    private func speakInternal(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "fr-FR")
+        utterance.rate = 0.55
+        utterance.volume = 1.0
+        utterance.pitchMultiplier = 1.0
+        
+        print("🔊 Synthèse: '\(text)'")
+        isCurrentlySpeaking = true
+        speechSynthesizer.speak(utterance)
+    }
+    
+    // MARK: - Interface principale (méthodes existantes avec vérification interruption)
+    
     func processImportantObjects(_ importantObjects: [(object: TrackedObject, score: Float)]) {
+        // Si interrompu pour interaction, suspendre les annonces automatiques
+        if isInterrupted {
+            print("⏸️ Traitement suspendu - interaction en cours")
+            return
+        }
+        
         print("🎯 processImportantObjects appelé avec \(importantObjects.count) objets")
         
         guard !importantObjects.isEmpty else {
@@ -226,6 +403,16 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         updateContextualState(importantObjects, context: currentContext, currentTime: currentTime)
     }
     
+    // Méthode stopSpeaking modifiée
+    func stopSpeaking() {
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        messageQueue.removeAll()
+        isCurrentlySpeaking = false
+        print("🛑 Synthèse arrêtée")
+    }
+    
+    // MARK: - Méthodes privées existantes (inchangées mais avec vérification interruption)
+    
     private func handleEmptyObjectList() {
         print("⚠️ Aucun objet important à traiter")
         
@@ -250,6 +437,18 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             }
         }
     }
+    
+    private func processMessageQueue() {
+        // Vérifier si on est interrompu avant de traiter
+        guard !isInterrupted && !isCurrentlySpeaking && !messageQueue.isEmpty else { return }
+        
+        let message = messageQueue.removeFirst()
+        speakInternal(message.text)
+        print("🗣️ Annonce [\(message.changeType)]: \(message.text)")
+    }
+    
+    // MARK: - Toutes les autres méthodes privées restent identiques...
+    // (Je ne les recopie pas pour économiser l'espace, mais elles sont inchangées)
     
     private func reactivatePeriodicAnnouncements(_ currentTime: Date) {
         if !periodicAnnouncementsEnabled {
@@ -327,6 +526,8 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             self.priority = priority
         }
     }
+    
+    // [Toutes les autres méthodes utilitaires restent identiques...]
     
     private func selectDiverseObjectForAnnouncement(_ objects: [(object: TrackedObject, score: Float)]) -> (object: TrackedObject, score: Float)? {
         let objectsByType = Dictionary(grouping: objects) { $0.object.label.lowercased() }
@@ -466,32 +667,6 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         processMessageQueue()
     }
     
-    private func processMessageQueue() {
-        guard !isCurrentlySpeaking && !messageQueue.isEmpty else { return }
-        
-        let message = messageQueue.removeFirst()
-        speak(message.text)
-        print("🗣️ Annonce [\(message.changeType)]: \(message.text)")
-    }
-    
-    func speak(_ text: String) {
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "fr-FR")
-        utterance.rate = 0.55
-        utterance.volume = 1.0
-        utterance.pitchMultiplier = 1.0
-        
-        print("🔊 Tentative de synthèse: '\(text)'")
-        isCurrentlySpeaking = true
-        speechSynthesizer.speak(utterance)
-    }
-    
-    func stopSpeaking() {
-        speechSynthesizer.stopSpeaking(at: .immediate)
-        messageQueue.removeAll()
-        isCurrentlySpeaking = false
-    }
-    
     func clearAllState() {
         stopSpeaking()
         lastAnnouncements.removeAll()
@@ -500,18 +675,28 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         lastPeriodicAnnouncement = Date.distantPast
         recentlyAnnouncedTypes.removeAll()
         periodicAnnouncementsEnabled = true
-        print("🔄 État complet réinitialisé")
+        
+        // ← NOUVEAU : Reset état interaction
+        isInterrupted = false
+        interruptionReason = ""
+        lastInterruptionTime = Date.distantPast
+        
+        print("🔄 État complet réinitialisé (incluant interaction)")
     }
     
     func getStats() -> String {
+        let interruptionStatus = isInterrupted ? "⏸️ Interrompu (\(interruptionReason))" : "▶️ Actif"
+        
         return """
         🗣️ Statistiques de synthèse vocale intelligente:
            - État: \(isCurrentlySpeaking ? "En cours" : "Silencieux")
+           - Mode: \(interruptionStatus)
            - Messages en attente: \(messageQueue.count)
            - Annonces périodiques: \(periodicAnnouncementsEnabled ? "✅ Activées" : "⏸️ Désactivées")
            - Types récents: \(recentlyAnnouncedTypes.joined(separator: ", "))
         
         🎯 Mode intelligent: Détection des changements + Diversité des types
+        🎤 Support interaction: Interruption automatique + Reprises intelligentes
         """
     }
 }

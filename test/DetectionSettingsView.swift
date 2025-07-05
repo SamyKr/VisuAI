@@ -73,7 +73,7 @@ struct CameraDetectionSettingsView: View {
     ].sorted()
     
     @State private var selectedClasses: Set<String> = []
-    @State private var currentPerformanceMode: PerformanceMode = .normal  // ← NOUVEAU
+    @State private var currentPerformanceMode: PerformanceMode = .rapide  // ← NOUVEAU
     @State private var searchText = ""
     
     // États pour les vibrations
@@ -660,7 +660,7 @@ struct CameraDetectionSettingsView: View {
         selectedClasses.remove("wall")
         selectedClasses.remove("fence")
         
-        currentPerformanceMode = .normal  // ← MODIFIÉ
+        currentPerformanceMode = .rapide  // ← MODIFIÉ
         
         // Réinitialisation des paramètres de vibration
         proximityAlertsEnabled = true

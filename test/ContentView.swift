@@ -383,7 +383,7 @@ struct ImageDetectionView: View {
                 self.inferenceTime = detectionTime
                 self.isDetecting = false
                 
-                print("🎯 YOLOv11 + Tracking: \(detections.count) objets détectés en \(String(format: "%.1f", detectionTime))ms")
+                
                 for detection in detections {
                     print("- #\(detection.trackingInfo.id) \(detection.label): \(String(format: "%.1f", detection.confidence * 100))% (distance: \(detection.distance != nil ? String(format: "%.1f", detection.distance!) + "m" : "N/A"))")
                 }

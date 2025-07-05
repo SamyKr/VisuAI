@@ -175,9 +175,7 @@ class HapticManager {
         
         let intensity = calculateIntensity(for: distance, in: .danger)
         
-        print("🚨 ALERTE DANGER: Objet détecté à \(String(format: "%.1f", distance))m")
-        print("   - Intensité: \(String(format: "%.1f", intensity))")
-        print("   - Fréquence: vibration toutes les \(String(format: "%.2f", dynamicCooldown))s")
+      
         
         // Vibration avec intensité graduée pour danger immédiat
         if let engine = hapticEngine {

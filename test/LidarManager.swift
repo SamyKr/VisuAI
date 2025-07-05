@@ -32,15 +32,15 @@ class LiDARManager: NSObject {
         // Vérification de la disponibilité du LiDAR
         if let device = AVCaptureDevice.default(.builtInLiDARDepthCamera, for: .video, position: .back) {
             isLiDARAvailable = true
-            print("✅ LiDAR détecté et disponible")
+            
             
             // Vérifier les formats supportés
             let supportedFormats = device.activeFormat.supportedDepthDataFormats
-            print("📊 Formats de profondeur supportés: \(supportedFormats.count)")
+          
             
             for format in supportedFormats {
                 let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                print("   - Format: \(dimensions.width)x\(dimensions.height)")
+                // print("   - Format: \(dimensions.width)x\(dimensions.height)")
             }
             
         } else {

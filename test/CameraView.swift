@@ -1,5 +1,5 @@
 //
-//  CameraView.swift (Version avec LiDAR + Tracking + ImportantObjectsBoard + VoiceSynthesis)
+//  CameraView.swift (Version Optimisée - HUD Compact)
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
@@ -7,10 +7,13 @@
 //  Updated with Object Tracking - 20/06/2025
 //  Updated with ImportantObjectsBoard - 21/06/2025
 //  Updated with VoiceSynthesis - 02/07/2025
+//  Updated with VoiceInteraction - 02/07/2025 (ERREURS CORRIGÉES)
+//  Optimized UI - 03/07/2025
 //
 
 import SwiftUI
 import AVFoundation
+import Speech
 
 struct CameraView: UIViewRepresentable {
     let cameraManager: CameraManager
@@ -37,7 +40,9 @@ struct CameraView: UIViewRepresentable {
 
 struct CameraViewWithDetection: View {
     @StateObject private var cameraManager = CameraManager()
-    @StateObject private var voiceSynthesisManager = VoiceSynthesisManager() // ← NOUVEAU
+    @StateObject private var voiceSynthesisManager = VoiceSynthesisManager()
+    @StateObject private var voiceInteractionManager = VoiceInteractionManager()
+    
     @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
     @State private var showingStats = false
     @State private var showingPermissionAlert = false
@@ -52,27 +57,24 @@ struct CameraViewWithDetection: View {
     // Timer pour rafraîchir le leaderboard
     @State private var importantObjectsTimer: Timer?
     
-    // NOUVELLE FONCTIONNALITÉ : Configuration initiale
+    // Configuration initiale
     @State private var showingInitialConfiguration = false
     @State private var hasConfiguredInitially = false
     
-    // NOUVEAU : États pour la synthèse vocale
+    // États pour la synthèse vocale et interaction
     @State private var voiceEnabled = true
-    @State private var showingVoiceStats = false
+    @State private var voiceInteractionEnabled = true
+    @State private var showingVoicePermissionAlert = false
+    
+    // État pour débug (développement seulement)
+    @State private var showDebugControls = false
     
     var body: some View {
         ZStack {
             CameraView(cameraManager: cameraManager)
                 .onAppear {
-                    setupCameraManager()
+                    setupManagers()
                     startImportantObjectsTimer()
-                    
-                    // ← NOUVEAU : Test audio temporaire
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                        if voiceEnabled {
-                            voiceSynthesisManager.speak("Système de synthèse vocale activé")
-                        }
-                    }
                     
                     if cameraManager.hasPermission {
                         cameraManager.startSession()
@@ -82,7 +84,6 @@ struct CameraViewWithDetection: View {
                 }
                 .onReceive(cameraManager.$hasPermission) { hasPermission in
                     if hasPermission {
-                        // Vérifier si on doit montrer la configuration initiale
                         if !hasConfiguredInitially {
                             showingInitialConfiguration = true
                         } else {
@@ -92,11 +93,42 @@ struct CameraViewWithDetection: View {
                 }
                 .onDisappear {
                     cameraManager.stopSession()
+                    voiceSynthesisManager.stopSpeaking()
+                    voiceInteractionManager.stopContinuousListening()
                     stopImportantObjectsTimer()
-                    voiceSynthesisManager.stopSpeaking() // ← NOUVEAU
                 }
             
-            // Overlay pour les bounding boxes avec couleurs de tracking
+            // 🎤 OVERLAY TRANSPARENT POUR APPUI LONG SUR TOUT L'ÉCRAN
+            Color.clear
+                .contentShape(Rectangle())
+                .onLongPressGesture(minimumDuration: 0.8) {
+                    // 🛑 COUPER IMMÉDIATEMENT TOUTE SYNTHÈSE VOCALE
+                    voiceSynthesisManager.stopSpeaking()
+                    voiceSynthesisManager.interruptForInteraction(reason: "Question utilisateur")
+                    
+                    if voiceInteractionEnabled && voiceInteractionManager.isReadyForQuestion() {
+                        print("🎤 Appui long détecté - arrêt synthèse et démarrage question")
+                        
+                        // Petit délai pour s'assurer que l'audio est libéré
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            voiceInteractionManager.startSingleQuestion()
+                        }
+                        
+                        cameraManager.playSelectionFeedback()
+                    } else if !voiceInteractionEnabled {
+                        print("⚠️ Interaction vocale désactivée")
+                        voiceSynthesisManager.speak("Interaction vocale désactivée")
+                    } else if !voiceInteractionManager.interactionEnabled {
+                        print("⚠️ Permission microphone requise")
+                        voiceSynthesisManager.speak("Permission microphone requise")
+                        showingVoicePermissionAlert = true
+                    } else {
+                        print("⚠️ Service vocal occupé")
+                        voiceSynthesisManager.speak("Service vocal occupé, veuillez patienter")
+                    }
+                }
+            
+            // Overlay pour les bounding boxes
             GeometryReader { geometry in
                 ForEach(boundingBoxes.indices, id: \.self) { index in
                     let detection = boundingBoxes[index]
@@ -104,7 +136,6 @@ struct CameraViewWithDetection: View {
                     let tracking = detection.trackingInfo
                     
                     ZStack {
-                        // Bounding box avec couleur de tracking et opacité
                         Rectangle()
                             .stroke(Color(tracking.color).opacity(tracking.opacity), lineWidth: tracking.opacity > 0.5 ? 3 : 2)
                             .background(Color.clear)
@@ -118,32 +149,71 @@ struct CameraViewWithDetection: View {
                         y: (1 - rect.midY) * geometry.size.height
                     )
                     
-                    // Labels avec tracking ID et couleur
                     detectionLabelsView(for: detection, geometry: geometry, rect: rect)
                 }
             }
             
-            // HUD avec métriques de performance et contrôles LiDAR + Tracking + Voice
+            // Indicateur d'écoute d'interaction vocale
+            if voiceInteractionManager.isListening {
+                VStack {
+                    HStack {
+                        Spacer()
+                        VoiceListeningIndicator(
+                            isWaitingForQuestion: voiceInteractionManager.isWaitingForQuestion,
+                            lastRecognizedText: voiceInteractionManager.lastRecognizedText
+                        )
+                        .padding(.top, 160)
+                        .padding(.trailing)
+                    }
+                    Spacer()
+                }
+            }
+            
+            // Indicateur discret d'appui long (si interaction vocale activée et prête)
+            if voiceInteractionEnabled && voiceInteractionManager.isReadyForQuestion() && !voiceInteractionManager.isListening {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Image(systemName: "hand.point.up.left.fill")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.7))
+                            Text("Appui long pour parler")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.6))
+                        .cornerRadius(8)
+                        .padding(.trailing)
+                        .padding(.bottom, 120)
+                    }
+                }
+            }
+            
+            // HUD Compact
             VStack {
-                // Top HUD - Métriques en temps réel
-                topHUDView
+                compactHUDView
                 
                 Spacer()
                 
-                // Panneau de statistiques détaillées
                 if showingStats {
-                    PerformanceStatsView(cameraManager: cameraManager)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    PerformanceStatsView(
+                        cameraManager: cameraManager,
+                        voiceSynthesisManager: voiceSynthesisManager,
+                        voiceInteractionManager: voiceInteractionManager
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 
-                // ← NOUVEAU : Panneau de statistiques vocales
-                if showingVoiceStats {
-                    VoiceStatsView(voiceSynthesisManager: voiceSynthesisManager)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+                mainControlsView
                 
-                // Controls en bas avec LiDAR et Tracking
-                bottomControlsView
+                // Boutons de debug (masqués par défaut)
+                if showDebugControls {
+                    debugControlsView
+                }
             }
             
             // ImportantObjectsBoard overlay
@@ -155,7 +225,7 @@ struct CameraViewWithDetection: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
             
-            // Bouton ImportantObjectsBoard (en haut à droite)
+            // Bouton ImportantObjectsBoard
             VStack {
                 HStack {
                     Spacer()
@@ -163,13 +233,13 @@ struct CameraViewWithDetection: View {
                         isVisible: $showingImportantObjects,
                         objectCount: importantObjects.count
                     )
-                    .padding(.top, 100) // Ajuster selon la hauteur de votre topHUD
+                    .padding(.top, 100)
                     .padding(.trailing)
                 }
                 Spacer()
             }
         }
-        .navigationTitle("Détection + LiDAR + Tracking + Voice")
+        .navigationTitle("Vision AI + LiDAR + Voice")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Permission Caméra", isPresented: $showingPermissionAlert) {
             Button("Paramètres") {
@@ -180,6 +250,16 @@ struct CameraViewWithDetection: View {
             Button("Annuler", role: .cancel) { }
         } message: {
             Text("L'accès à la caméra est nécessaire pour la détection en temps réel.")
+        }
+        .alert("Permission Microphone", isPresented: $showingVoicePermissionAlert) {
+            Button("Paramètres") {
+                if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(settingsUrl)
+                }
+            }
+            Button("Annuler", role: .cancel) { }
+        } message: {
+            Text("L'accès au microphone est nécessaire pour l'interaction vocale.")
         }
         .alert("LiDAR Information", isPresented: $showingLiDARInfo) {
             Button("Compris", role: .cancel) { }
@@ -194,121 +274,118 @@ struct CameraViewWithDetection: View {
                 isPresented: $showingInitialConfiguration,
                 hasConfiguredInitially: $hasConfiguredInitially,
                 cameraManager: cameraManager,
-                proximityAlertsEnabled: $proximityAlertsEnabled
+                proximityAlertsEnabled: $proximityAlertsEnabled,
+                voiceInteractionEnabled: $voiceInteractionEnabled
             )
         }
         .animation(.easeInOut(duration: 0.3), value: showingStats)
         .animation(.easeInOut(duration: 0.3), value: showingImportantObjects)
-        .animation(.easeInOut(duration: 0.3), value: showingVoiceStats) // ← NOUVEAU
     }
     
-    // MARK: - View Components
+    // MARK: - HUD Ultra-Compact (UNE SEULE LIGNE)
     
-    private var topHUDView: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Circle()
-                        .fill(cameraManager.isRunning ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
-                    Text(cameraManager.isRunning ? "LIVE" : "STOPPED")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                }
+    private var compactHUDView: some View {
+        HStack(spacing: 8) {
+            // Status compact tout en ligne
+            HStack(spacing: 8) {
+                // Status live
+                Circle()
+                    .fill(cameraManager.isRunning ? Color.green : Color.red)
+                    .frame(width: 6, height: 6)
                 
-                Text("FPS: \(String(format: "%.1f", cameraManager.currentFPS))")
-                    .font(.caption)
+                // FPS
+                Text("\(String(format: "%.0f", cameraManager.currentFPS))")
+                    .font(.caption2)
                     .fontWeight(.bold)
+                    .foregroundColor(.white)
                 
-                // Compteur d'objets avec distinction actifs/mémoire
+                // Objets actifs
                 let activeObjects = boundingBoxes.filter { $0.trackingInfo.opacity > 0.5 }.count
                 let memoryObjects = boundingBoxes.filter { $0.trackingInfo.opacity <= 0.5 }.count
                 
-                HStack(spacing: 4) {
-                    Text("🎯")
+                Text("🎯\(activeObjects)")
+                    .font(.caption2)
+                    .foregroundColor(.green)
+                
+                if memoryObjects > 0 {
+                    Text("+\(memoryObjects)")
                         .font(.caption2)
-                    Text("\(activeObjects)")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(.green)
-                    if memoryObjects > 0 {
-                        Text("+\(memoryObjects)")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
-                    }
+                        .foregroundColor(.orange)
                 }
                 
-                // Compteur objets importants
+                // VIP objects
                 if importantObjects.count > 0 {
-                    HStack(spacing: 4) {
-                        Text("🏆")
-                            .font(.caption2)
-                        Text("\(importantObjects.count)")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.yellow)
-                        Text("VIP")
-                            .font(.caption2)
-                            .foregroundColor(.yellow)
-                    }
+                    Text("🏆\(importantObjects.count)")
+                        .font(.caption2)
+                        .foregroundColor(.yellow)
                 }
                 
-                // ← NOUVEAU : Status synthèse vocale
-                HStack(spacing: 4) {
+                // Status services ultra-compacts
+                Circle()
+                    .fill(voiceEnabled ? .blue : .gray)
+                    .frame(width: 4, height: 4)
+                
+                Circle()
+                    .fill(getInteractionStatusColor())
+                    .frame(width: 4, height: 4)
+                
+                if cameraManager.lidarAvailable {
                     Circle()
-                        .fill(voiceEnabled ? .blue : .gray)
-                        .frame(width: 6, height: 6)
-                    Text("🗣️")
-                        .font(.caption2)
-                    Text(voiceEnabled ? "ON" : "OFF")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundColor(voiceEnabled ? .blue : .gray)
-                }
-                
-                // Status LiDAR et vibrations
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(getLiDARStatusColor())
-                        .frame(width: 6, height: 6)
-                    Text("LiDAR")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                    Text(getLiDARStatusText())
-                        .font(.caption2)
-                }
-                
-                // Status des alertes de proximité
-                if cameraManager.lidarAvailable && cameraManager.isLiDAREnabled {
-                    HStack(spacing: 4) {
+                        .fill(cameraManager.isLiDAREnabled ? .blue : .gray)
+                        .frame(width: 4, height: 4)
+                    
+                    if cameraManager.isLiDAREnabled {
                         Circle()
                             .fill(proximityAlertsEnabled ? .orange : .gray)
-                            .frame(width: 6, height: 6)
-                        Text("📳")
-                            .font(.caption2)
-                        Text(proximityAlertsEnabled ? "ON" : "OFF")
-                            .font(.caption2)
-                            .fontWeight(.bold)
+                            .frame(width: 4, height: 4)
                     }
                 }
             }
-            .foregroundColor(.white)
-            .padding(12)
-            .background(Color.black.opacity(0.6))
-            .cornerRadius(12)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(8)
             
             Spacer()
             
-            // Boutons de contrôle avec LiDAR et Tracking et Voice
-            controlButtonsView
+            // Boutons essentiels seulement
+            essentialControlsView
         }
         .padding(.horizontal)
-        .padding(.top)
+        .padding(.top, 8)
     }
     
-    private var controlButtonsView: some View {
-        HStack(spacing: 12) {
-            // ← NOUVEAU : Bouton synthèse vocale
+    private var essentialControlsView: some View {
+        HStack(spacing: 6) {
+            // Indicateur d'état vocal (pas un bouton)
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(getInteractionStatusColor())
+                    .frame(width: 6, height: 6)
+                Image(systemName: voiceInteractionEnabled ? "mic.fill" : "mic.slash")
+                    .font(.caption2)
+                    .foregroundColor(getInteractionStatusColor())
+                Text(voiceInteractionEnabled ? "ON" : "OFF")
+                    .font(.caption2)
+                    .foregroundColor(getInteractionStatusColor())
+                    .fontWeight(.bold)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(6)
+            .onTapGesture {
+                // Tap pour activer/désactiver le service
+                voiceInteractionEnabled.toggle()
+                if voiceInteractionEnabled {
+                    voiceInteractionManager.startContinuousListening()
+                } else {
+                    voiceInteractionManager.stopContinuousListening()
+                }
+                cameraManager.playSelectionFeedback()
+            }
+            
+            // Speaker
             Button(action: {
                 voiceEnabled.toggle()
                 if !voiceEnabled {
@@ -317,37 +394,30 @@ struct CameraViewWithDetection: View {
                 cameraManager.playSelectionFeedback()
             }) {
                 Image(systemName: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    .font(.title2)
+                    .font(.caption)
                     .foregroundColor(voiceEnabled ? .blue : .gray)
-                    .padding(12)
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(12)
-            }
-            .onLongPressGesture {
-                showingVoiceStats.toggle()
+                    .padding(6)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(6)
             }
             
-            // Bouton reset tracking
+            // Reset
             Button(action: {
                 cameraManager.resetTracking()
-                voiceSynthesisManager.clearAllState() // ← MODIFIÉ : Nettoyage complet
+                voiceSynthesisManager.clearAllState()
+                voiceInteractionManager.stopContinuousListening()
                 cameraManager.playSuccessFeedback()
-                // Réinitialiser aussi le leaderboard
                 importantObjects.removeAll()
             }) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.title2)
+                    .font(.caption)
                     .foregroundColor(.white)
-                    .padding(12)
+                    .padding(6)
                     .background(Color.purple.opacity(0.8))
-                    .cornerRadius(12)
-            }
-            .onLongPressGesture {
-                // Afficher les stats de tracking
-                showingStats.toggle()
+                    .cornerRadius(6)
             }
             
-            // Bouton LiDAR
+            // LiDAR (si disponible)
             if cameraManager.lidarAvailable {
                 Button(action: {
                     let success = cameraManager.toggleLiDAR()
@@ -356,228 +426,174 @@ struct CameraViewWithDetection: View {
                     }
                 }) {
                     Image(systemName: cameraManager.isLiDAREnabled ? "location.fill" : "location")
-                        .font(.title2)
+                        .font(.caption)
                         .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .white)
-                        .padding(12)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(12)
+                        .padding(6)
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(6)
                 }
                 .onLongPressGesture {
                     showingLiDARInfo = true
                 }
-                
-                // Bouton alertes de proximité (seulement si LiDAR activé)
-                if cameraManager.isLiDAREnabled {
-                    Button(action: {
-                        proximityAlertsEnabled.toggle()
-                        cameraManager.enableProximityAlerts(proximityAlertsEnabled)
-                        cameraManager.playSelectionFeedback()
-                    }) {
-                        Image(systemName: proximityAlertsEnabled ? "bell.fill" : "bell.slash.fill")
-                            .font(.title2)
-                            .foregroundColor(proximityAlertsEnabled ? .orange : .gray)
-                            .padding(12)
-                            .background(Color.black.opacity(0.6))
-                            .cornerRadius(12)
-                    }
-                    .onLongPressGesture {
-                        showingLiDARInfo = true
-                    }
-                }
             }
             
-            // Bouton paramètres
+            // Settings
             Button(action: {
                 showingSettings = true
                 cameraManager.playSelectionFeedback()
             }) {
                 Image(systemName: "gear")
-                    .font(.title2)
+                    .font(.caption)
                     .foregroundColor(.white)
-                    .padding(12)
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(12)
-            }
-            
-            // Bouton pour les statistiques détaillées
-            Button(action: {
-                showingStats.toggle()
-                cameraManager.playSelectionFeedback()
-            }) {
-                Image(systemName: showingStats ? "chart.bar.fill" : "chart.bar")
-                    .font(.title2)
-                    .foregroundColor(.white)
-                    .padding(12)
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(12)
+                    .padding(6)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(6)
             }
         }
     }
     
-    private var bottomControlsView: some View {
+    private var mainControlsView: some View {
         HStack {
-            Button("Reset Stats") {
-                cameraManager.resetPerformanceStats()
-                voiceSynthesisManager.clearAllState() // ← MODIFIÉ : Nettoyage complet
-                // Réinitialiser aussi le leaderboard
-                importantObjects.removeAll()
-            }
-            .font(.caption)
-            .foregroundColor(.white)
-            .padding(8)
-            .background(Color.blue.opacity(0.7))
-            .cornerRadius(8)
-            
-            // ← NOUVEAU : Bouton test vocal
-            Button("Test Audio") {
-                if voiceEnabled {
-                    voiceSynthesisManager.speak("Test de synthèse vocale fonctionnel")
-                }
-            }
-            .font(.caption)
-            .foregroundColor(.white)
-            .padding(8)
-            .background(Color.green.opacity(0.7))
-            .cornerRadius(8)
-            .disabled(!voiceEnabled)
-            
-            Button("Reset Config") {
-                hasConfiguredInitially = false
-                showingInitialConfiguration = true
-                cameraManager.stopSession()
-                voiceSynthesisManager.stopSpeaking() // ← NOUVEAU
-            }
-            .font(.caption)
-            .foregroundColor(.white)
-            .padding(8)
-            .background(Color.purple.opacity(0.7))
-            .cornerRadius(8)
-            
-            // Indicateurs compacts avec tracking
-            HStack(spacing: 8) {
-                // Indicateur tracking
+            // Bouton Stats (gauche)
+            Button(action: {
+                showingStats.toggle()
+                cameraManager.playSelectionFeedback()
+            }) {
                 HStack(spacing: 4) {
-                    Text("🎯")
+                    Image(systemName: showingStats ? "chart.bar.fill" : "chart.bar")
                         .font(.caption)
-                    
-                    let activeCount = boundingBoxes.filter { $0.trackingInfo.opacity > 0.5 }.count
-                    let memoryCount = boundingBoxes.filter { $0.trackingInfo.opacity <= 0.5 }.count
-                    
-                    Text("\(activeCount)")
+                    Text("Stats")
                         .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.green)
-                    
-                    if memoryCount > 0 {
-                        Text("+\(memoryCount)")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.orange)
-                    }
                 }
-                .padding(6)
-                .background(Color.black.opacity(0.5))
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.black.opacity(0.7))
                 .cornerRadius(6)
-                
-                // Indicateur objets importants
-                if importantObjects.count > 0 {
-                    HStack(spacing: 4) {
-                        Text("🏆")
-                            .font(.caption)
-                        
-                        Text("\(importantObjects.count)")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.yellow)
-                    }
-                    .padding(6)
-                    .background(Color.black.opacity(0.5))
-                    .cornerRadius(6)
-                    .onTapGesture {
-                        showingImportantObjects.toggle()
-                        cameraManager.playSelectionFeedback()
-                    }
-                }
-                
-                // ← NOUVEAU : Indicateur synthèse vocale
-                HStack(spacing: 4) {
-                    Text("🗣️")
+            }
+            
+            // Bouton debug compact
+            Button("🔧") {
+                showDebugControls.toggle()
+            }
+            .font(.caption)
+            .padding(6)
+            .background(Color.black.opacity(0.5))
+            .cornerRadius(4)
+            
+            Spacer()
+            
+            // Alertes proximité (si LiDAR actif)
+            if cameraManager.isLiDAREnabled {
+                Button(action: {
+                    proximityAlertsEnabled.toggle()
+                    cameraManager.enableProximityAlerts(proximityAlertsEnabled)
+                    cameraManager.playSelectionFeedback()
+                }) {
+                    Text(proximityAlertsEnabled ? "📳" : "🔕")
                         .font(.caption)
-                    
-                    Text(voiceEnabled ? "ON" : "OFF")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundColor(voiceEnabled ? .blue : .gray)
-                }
-                .padding(6)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(6)
-                .onTapGesture {
-                    showingVoiceStats.toggle()
-                }
-                
-                // Indicateurs LiDAR
-                if cameraManager.lidarAvailable {
-                    // Indicateur LiDAR
-                    HStack(spacing: 4) {
-                        Image(systemName: "location.fill")
-                            .font(.caption)
-                            .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
-                        
-                        Text(cameraManager.isLiDAREnabled ? "ON" : "OFF")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
-                    }
-                    .padding(6)
-                    .background(Color.black.opacity(0.5))
-                    .cornerRadius(6)
-                    
-                    // Indicateur alertes de proximité (seulement si LiDAR activé)
-                    if cameraManager.isLiDAREnabled {
-                        HStack(spacing: 4) {
-                            Text("📳")
-                                .font(.caption)
-                            
-                            Text(proximityAlertsEnabled ? "ON" : "OFF")
-                                .font(.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(proximityAlertsEnabled ? .orange : .gray)
-                        }
                         .padding(6)
-                        .background(Color.black.opacity(0.5))
+                        .background(Color.black.opacity(0.7))
                         .cornerRadius(6)
-                    }
                 }
             }
             
             Spacer()
             
-            Button(cameraManager.isRunning ? "Stop" : "Start") {
+            // Start/Stop principal
+            Button(cameraManager.isRunning ? "■" : "▶") {
                 if cameraManager.isRunning {
                     cameraManager.stopSession()
-                    voiceSynthesisManager.stopSpeaking() // ← NOUVEAU
+                    voiceSynthesisManager.stopSpeaking()
+                    voiceInteractionManager.stopContinuousListening()
                 } else {
                     if cameraManager.hasPermission {
                         cameraManager.startSession()
+                        
+                        // L'utilisateur activera manuellement l'interaction vocale
                     } else {
                         showingPermissionAlert = true
                     }
                 }
             }
-            .font(.headline)
+            .font(.title2)
             .foregroundColor(.white)
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
             .background(cameraManager.isRunning ? Color.red : Color.green)
-            .cornerRadius(10)
+            .cornerRadius(8)
         }
-        .padding()
+        .padding(.horizontal)
+        .padding(.bottom, 8)
     }
     
-    // MARK: - Detection Labels View avec Tracking
+    // MARK: - Debug Controls (ultra-compact)
+    
+    private var debugControlsView: some View {
+        HStack(spacing: 6) {
+            Text("🔧")
+                .font(.caption2)
+                .foregroundColor(.orange)
+            
+            Button("Reset") {
+                cameraManager.resetPerformanceStats()
+                voiceSynthesisManager.clearAllState()
+                importantObjects.removeAll()
+            }
+            .font(.caption2)
+            .foregroundColor(.white)
+            .padding(4)
+            .background(Color.blue.opacity(0.7))
+            .cornerRadius(4)
+            
+            Button("Audio") {
+                if voiceEnabled {
+                    voiceSynthesisManager.speak("Test audio")
+                }
+            }
+            .font(.caption2)
+            .foregroundColor(.white)
+            .padding(4)
+            .background(Color.green.opacity(0.7))
+            .cornerRadius(4)
+            .disabled(!voiceEnabled)
+            
+            Button("Voice") {
+                if voiceInteractionEnabled {
+                    voiceInteractionManager.interruptForInteraction(reason: "Test")
+                    voiceInteractionManager.speakInteraction("Test d'interaction - appui long sur l'écran puis posez votre question")
+                }
+            }
+            .font(.caption2)
+            .foregroundColor(.white)
+            .padding(4)
+            .background(Color.purple.opacity(0.7))
+            .cornerRadius(4)
+            .disabled(!voiceInteractionEnabled)
+            
+            Button("Config") {
+                hasConfiguredInitially = false
+                showingInitialConfiguration = true
+                cameraManager.stopSession()
+                voiceSynthesisManager.stopSpeaking()
+                voiceInteractionManager.stopContinuousListening()
+            }
+            .font(.caption2)
+            .foregroundColor(.white)
+            .padding(4)
+            .background(Color.orange.opacity(0.7))
+            .cornerRadius(4)
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.8))
+        .cornerRadius(8)
+        .padding(.horizontal)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+    
+    // MARK: - Detection Labels View (inchangé)
     private func detectionLabelsView(for detection: (rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double)), geometry: GeometryProxy, rect: CGRect) -> some View {
         HStack(spacing: 4) {
-            // ID de tracking avec couleur
             Text("#\(detection.trackingInfo.id)")
                 .font(.caption)
                 .fontWeight(.bold)
@@ -587,13 +603,11 @@ struct CameraViewWithDetection: View {
                 .background(Color(detection.trackingInfo.color).opacity(detection.trackingInfo.opacity))
                 .cornerRadius(4)
             
-            // Indicateur VIP si l'objet est dans le leaderboard
             if isObjectImportant(trackingId: detection.trackingInfo.id) {
                 Text("🏆")
                     .font(.caption2)
             }
             
-            // Label de l'objet
             Text(detection.label)
                 .font(.caption)
                 .fontWeight(.bold)
@@ -603,7 +617,6 @@ struct CameraViewWithDetection: View {
                 .background(Color(detection.trackingInfo.color).opacity(detection.trackingInfo.opacity * 0.8))
                 .cornerRadius(4)
             
-            // Confiance
             Text("\(String(format: "%.0f", detection.confidence * 100))%")
                 .font(.caption2)
                 .fontWeight(.bold)
@@ -613,7 +626,6 @@ struct CameraViewWithDetection: View {
                 .background(Color(detection.trackingInfo.color).opacity(detection.trackingInfo.opacity * 0.6))
                 .cornerRadius(3)
             
-            // Distance LiDAR si disponible
             if let distance = detection.distance {
                 Text(formatDistance(distance))
                     .font(.caption2)
@@ -624,7 +636,6 @@ struct CameraViewWithDetection: View {
                     .background(Color.blue.opacity(0.9 * detection.trackingInfo.opacity))
                     .cornerRadius(3)
             } else if cameraManager.isLiDAREnabled {
-                // Indicateur que la distance n'est pas disponible
                 Text("--")
                     .font(.caption2)
                     .fontWeight(.bold)
@@ -635,7 +646,6 @@ struct CameraViewWithDetection: View {
                     .cornerRadius(3)
             }
             
-            // Indicateur de statut (actif/mémoire)
             if detection.trackingInfo.opacity <= 0.5 {
                 Text("👻")
                     .font(.caption2)
@@ -648,23 +658,24 @@ struct CameraViewWithDetection: View {
         )
     }
     
-    // MARK: - Helper Methods
+    // MARK: - Setup Methods (inchangé)
     
-    private func setupCameraManager() {
+    private func setupManagers() {
         cameraManager.delegate = CameraDetectionDelegate { newDetections in
             self.boundingBoxes = newDetections
         }
         
-        // Activer automatiquement le LiDAR si disponible
         if cameraManager.lidarAvailable {
             let _ = cameraManager.enableLiDAR()
         }
         
-        // Synchroniser l'état des alertes de proximité
         proximityAlertsEnabled = cameraManager.isProximityAlertsEnabled()
+        voiceInteractionManager.setVoiceSynthesisManager(voiceSynthesisManager)
+        
+        // Plus d'activation automatique - l'utilisateur contrôle manuellement
     }
     
-    // MARK: - ImportantObjects Timer Management
+    // MARK: - Timer Management (inchangé)
     
     private func startImportantObjectsTimer() {
         importantObjectsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
@@ -677,23 +688,40 @@ struct CameraViewWithDetection: View {
         importantObjectsTimer = nil
     }
     
-    // ← MODIFIÉ : Ajout de la synthèse vocale
     private func updateImportantObjects() {
-        // Récupérer les objets importants du CameraManager
         let newImportantObjects = cameraManager.getTopImportantObjects(maxCount: 15)
+        voiceInteractionManager.updateImportantObjects(newImportantObjects)
         
-        // ← NOUVEAU : Appeler la synthèse vocale si activée
         if voiceEnabled && !newImportantObjects.isEmpty {
             voiceSynthesisManager.processImportantObjects(newImportantObjects)
         }
         
-        // Mettre à jour seulement si il y a des changements significatifs
         if !areImportantObjectsEqual(newImportantObjects, importantObjects) {
             withAnimation(.easeInOut(duration: 0.3)) {
                 importantObjects = newImportantObjects
             }
         }
     }
+    
+    // MARK: - Helper Methods pour interaction vocale (inchangé)
+    
+    private func getInteractionStatusColor() -> Color {
+        if !voiceInteractionEnabled { return .gray }
+        if !voiceInteractionManager.interactionEnabled { return .red }
+        if voiceInteractionManager.isListening { return .green }
+        if voiceInteractionManager.isReadyForQuestion() { return .blue }
+        return .orange
+    }
+    
+    private func getInteractionButtonColor() -> Color {
+        if !voiceInteractionEnabled { return .gray }
+        if !voiceInteractionManager.interactionEnabled { return .red }
+        if voiceInteractionManager.isListening { return .green }
+        if voiceInteractionManager.isReadyForQuestion() { return .blue }
+        return .orange
+    }
+    
+    // MARK: - Helper Methods existantes (inchangées)
     
     private func areImportantObjectsEqual(
         _ list1: [(object: TrackedObject, score: Float)],
@@ -712,20 +740,6 @@ struct CameraViewWithDetection: View {
     
     private func isObjectImportant(trackingId: Int) -> Bool {
         return importantObjects.contains { $0.object.trackingNumber == trackingId }
-    }
-    
-    private func getLiDARStatusColor() -> Color {
-        if !cameraManager.lidarAvailable {
-            return .gray
-        }
-        return cameraManager.isLiDAREnabled ? .blue : .orange
-    }
-    
-    private func getLiDARStatusText() -> String {
-        if !cameraManager.lidarAvailable {
-            return "N/A"
-        }
-        return cameraManager.isLiDAREnabled ? "ON" : "OFF"
     }
     
     private func getLiDARInfoMessage() -> String {
@@ -757,6 +771,12 @@ struct CameraViewWithDetection: View {
             • Annonces automatiques des objets importants
             • Touchez l'icône 🔊 pour activer/désactiver
             • Fréquence intelligente pour éviter la surcharge
+            
+            🎤 Interaction Vocale:
+            • Appui long n'importe où sur l'écran pour poser une question
+            • Parlez après le bip sonore : "Y a-t-il une voiture ?", "Où est le feu ?", "Décris la scène"
+            • Une question à la fois, pas d'écoute continue
+            • 100% privé et local, aucune donnée envoyée sur internet
             """
         } else {
             return """
@@ -772,6 +792,8 @@ struct CameraViewWithDetection: View {
             🏆 Le leaderboard des objets importants fonctionne avec ou sans LiDAR.
             
             🗣️ La synthèse vocale fonctionne avec ou sans LiDAR.
+            
+            🎤 L'interaction vocale fonctionne avec ou sans LiDAR.
             """
         }
     }
@@ -787,7 +809,7 @@ struct CameraViewWithDetection: View {
     }
 }
 
-// Delegate pour gérer les détections avec tracking et LiDAR
+// MARK: - Delegate (inchangé)
 class CameraDetectionDelegate: CameraManagerDelegate {
     let onDetections: ([(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))]) -> Void
     
@@ -800,50 +822,63 @@ class CameraDetectionDelegate: CameraManagerDelegate {
     }
 }
 
-// Vue pour afficher les statistiques détaillées avec LiDAR et Tracking
+// MARK: - Vue de statistiques consolidée
 struct PerformanceStatsView: View {
     let cameraManager: CameraManager
-    @State private var statsText = ""
+    let voiceSynthesisManager: VoiceSynthesisManager
+    let voiceInteractionManager: VoiceInteractionManager
+    
+    @State private var cameraStats = ""
+    @State private var voiceStats = ""
+    @State private var interactionStats = ""
     
     var body: some View {
         ScrollView {
-            Text(statsText)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.white)
+            VStack(alignment: .leading, spacing: 16) {
+                // Stats Caméra
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("📹 Caméra & Détection")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Text(cameraStats)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.white)
+                }
                 .padding()
                 .background(Color.black.opacity(0.8))
                 .cornerRadius(12)
-        }
-        .frame(maxHeight: 200)
-        .padding(.horizontal)
-        .onAppear {
-            updateStats()
-        }
-        .onReceive(Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()) { _ in
-            updateStats()
-        }
-    }
-    
-    private func updateStats() {
-        statsText = cameraManager.getPerformanceStats()
-    }
-}
-
-// ← NOUVELLE : Vue pour afficher les statistiques vocales
-struct VoiceStatsView: View {
-    let voiceSynthesisManager: VoiceSynthesisManager
-    @State private var statsText = ""
-    
-    var body: some View {
-        ScrollView {
-            Text(statsText)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.white)
+                
+                // Stats Audio
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("🗣️ Synthèse Vocale")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Text(voiceStats)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.white)
+                }
                 .padding()
                 .background(Color.orange.opacity(0.8))
                 .cornerRadius(12)
+                
+                // Stats Interaction
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("🎤 Interaction Vocale")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Text(interactionStats)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+                .padding()
+                .background(Color.purple.opacity(0.8))
+                .cornerRadius(12)
+            }
         }
-        .frame(maxHeight: 150)
+        .frame(maxHeight: 300)
         .padding(.horizontal)
         .onAppear {
             updateStats()
@@ -854,169 +889,156 @@ struct VoiceStatsView: View {
     }
     
     private func updateStats() {
-        statsText = voiceSynthesisManager.getStats()
+        cameraStats = cameraManager.getPerformanceStats()
+        voiceStats = voiceSynthesisManager.getStats()
+        interactionStats = voiceInteractionManager.getStats()
     }
 }
 
-// MARK: - Vue de Configuration Initiale (Version avec modes de performance)
+struct VoiceListeningIndicator: View {
+    let isWaitingForQuestion: Bool
+    let lastRecognizedText: String
+    
+    @State private var pulseAnimation = false
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 12, height: 12)
+                    .scaleEffect(pulseAnimation ? 1.3 : 1.0)
+                    .animation(.easeInOut(duration: 1.0).repeatForever(), value: pulseAnimation)
+                
+                Image(systemName: "mic.fill")
+                    .font(.title2)
+                    .foregroundColor(.green)
+                
+                Text("Écoute en cours...")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+            }
+            
+            if !lastRecognizedText.isEmpty && !lastRecognizedText.contains("touchez") {
+                Text("« \(lastRecognizedText) »")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.8))
+                    .italic()
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding()
+        .background(Color.black.opacity(0.8))
+        .cornerRadius(12)
+        .onAppear {
+            pulseAnimation = true
+        }
+    }
+}
+
+// MARK: - Configuration Initiale (inchangé)
 struct InitialConfigurationView: View {
     @Binding var isPresented: Bool
     @Binding var hasConfiguredInitially: Bool
     let cameraManager: CameraManager
     @Binding var proximityAlertsEnabled: Bool
+    @Binding var voiceInteractionEnabled: Bool
     
     @State private var enableLiDAR = true
     @State private var enableVibrations = true
-    @State private var selectedPerformanceMode: PerformanceMode = .normal  // NOUVEAU
+    @State private var enableVoiceInteraction = true
     
     var body: some View {
         NavigationView {
-            ScrollView {  // Changé en ScrollView pour éviter les problèmes d'espace
-                VStack(spacing: 24) {
-                    // Header
-                    VStack(spacing: 16) {
-                        Image(systemName: "gearshape.2.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.blue)
-                        
-                        Text("Configuration Initiale")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                        
-                        Text("Configurez votre expérience de détection")
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.top)
+            VStack(spacing: 24) {
+                VStack(spacing: 16) {
+                    Image(systemName: "gearshape.2.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.blue)
                     
-                    // NOUVELLE SECTION : Mode de Performance
-                    VStack(spacing: 16) {
-                        HStack {
-                            Image(systemName: "speedometer")
-                                .font(.title2)
-                                .foregroundColor(.blue)
-                            
-                            Text("Mode de Performance")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-                            
-                            Spacer()
-                        }
-                        
-                        Text("Choisissez l'équilibre entre performance et autonomie")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        
-                        // Sélecteur de modes
-                        HStack(spacing: 12) {
-                            ForEach(PerformanceMode.allCases, id: \.self) { mode in
-                                InitialPerformanceModeButton(
-                                    mode: mode,
-                                    isSelected: selectedPerformanceMode == mode
-                                ) {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        selectedPerformanceMode = mode
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Description du mode sélectionné
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Image(systemName: selectedPerformanceMode.icon)
-                                    .foregroundColor(selectedPerformanceMode.color)
-                                Text("Mode \(selectedPerformanceMode.displayName)")
-                                    .fontWeight(.medium)
-                                    .foregroundColor(selectedPerformanceMode.color)
-                                Spacer()
-                            }
-                            
-                            Text(selectedPerformanceMode.description)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .multilineTextAlignment(.leading)
-                        }
-                        .padding()
-                        .background(selectedPerformanceMode.color.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
+                    Text("Configuration Initiale")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
                     
-                    // Options de configuration existantes
-                    VStack(spacing: 20) {
-                        // Option LiDAR
-                        ConfigurationOptionView(
-                            icon: "location.fill",
-                            iconColor: enableLiDAR ? .blue : .gray,
-                            title: "LiDAR",
-                            description: cameraManager.lidarAvailable ?
-                                "Mesure des distances en temps réel et alertes de proximité" :
-                                "LiDAR non disponible sur cet appareil",
-                            isEnabled: $enableLiDAR,
-                            isAvailable: cameraManager.lidarAvailable
-                        )
-                        
-                        // Option Vibrations
-                        ConfigurationOptionView(
-                            icon: "iphone.radiowaves.left.and.right",
-                            iconColor: enableVibrations ? .orange : .gray,
-                            title: "Alertes de Proximité",
-                            description: enableLiDAR ?
-                                "Vibrations lorsque des objets sont détectés à proximité" :
-                                "Nécessite LiDAR pour fonctionner",
-                            isEnabled: $enableVibrations,
-                            isAvailable: enableLiDAR
-                        )
-                    }
-                    
-                    // Boutons d'action
-                    VStack(spacing: 16) {
-                        Button(action: {
-                            applyConfiguration()
-                        }) {
-                            HStack {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.title2)
-                                Text("Commencer la Détection")
-                                    .font(.headline)
-                                    .fontWeight(.semibold)
-                            }
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .cornerRadius(12)
-                        }
-                        
-                        Button("Configurer plus tard") {
-                            skipConfiguration()
-                        }
+                    Text("Configurez votre expérience de détection avec interaction vocale")
                         .font(.body)
                         .foregroundColor(.secondary)
-                    }
-                    .padding(.bottom)
+                        .multilineTextAlignment(.center)
                 }
-                .padding(.horizontal)
+                .padding(.top)
+                
+                VStack(spacing: 20) {
+                    ConfigurationOptionView(
+                        icon: "location.fill",
+                        iconColor: enableLiDAR ? .blue : .gray,
+                        title: "LiDAR",
+                        description: cameraManager.lidarAvailable ?
+                            "Mesure des distances en temps réel et alertes de proximité" :
+                            "LiDAR non disponible sur cet appareil",
+                        isEnabled: $enableLiDAR,
+                        isAvailable: cameraManager.lidarAvailable
+                    )
+                    
+                    ConfigurationOptionView(
+                        icon: "iphone.radiowaves.left.and.right",
+                        iconColor: enableVibrations ? .orange : .gray,
+                        title: "Alertes de Proximité",
+                        description: enableLiDAR ?
+                            "Vibrations lorsque des objets sont détectés à proximité" :
+                            "Nécessite LiDAR pour fonctionner",
+                        isEnabled: $enableVibrations,
+                        isAvailable: enableLiDAR
+                    )
+                    
+                    ConfigurationOptionView(
+                        icon: "mic.fill",
+                        iconColor: enableVoiceInteraction ? .purple : .gray,
+                        title: "Interaction Vocale",
+                        description: "Appui long sur l'écran pour poser des questions : 'Y a-t-il une voiture ?', 'Décris la scène'",
+                        isEnabled: $enableVoiceInteraction,
+                        isAvailable: true
+                    )
+                }
+                
+                VStack(spacing: 16) {
+                    Button(action: {
+                        applyConfiguration()
+                    }) {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.title2)
+                            Text("Commencer la Détection")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .cornerRadius(12)
+                    }
+                    
+                    Button("Configurer plus tard") {
+                        skipConfiguration()
+                    }
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                }
+                .padding(.bottom)
+                
+                Spacer()
             }
+            .padding(.horizontal)
             .navigationBarHidden(true)
         }
         .onAppear {
-            // Initialiser avec les capacités de l'appareil
             enableLiDAR = cameraManager.lidarAvailable
             enableVibrations = cameraManager.lidarAvailable
-            
-            // Initialiser le mode de performance selon la valeur actuelle
-            let currentSkipFrames = cameraManager.getSkipFrames()
-            selectedPerformanceMode = PerformanceMode.allCases.first { $0.skipFrames == currentSkipFrames } ?? .normal
+            enableVoiceInteraction = true
         }
         .onChange(of: enableLiDAR) { lidarEnabled in
-            // Si LiDAR est désactivé, désactiver aussi les vibrations
             if !lidarEnabled {
                 enableVibrations = false
             }
@@ -1024,93 +1046,46 @@ struct InitialConfigurationView: View {
     }
     
     private func applyConfiguration() {
-        // NOUVEAU : Appliquer le mode de performance
-        cameraManager.setSkipFrames(selectedPerformanceMode.skipFrames)
-        
-        // Appliquer la configuration LiDAR
         if enableLiDAR && cameraManager.lidarAvailable {
             let _ = cameraManager.enableLiDAR()
         } else {
             cameraManager.disableLiDAR()
         }
         
-        // Appliquer la configuration des vibrations
         proximityAlertsEnabled = enableVibrations && enableLiDAR
         cameraManager.enableProximityAlerts(proximityAlertsEnabled)
+        voiceInteractionEnabled = enableVoiceInteraction
         
-        // Marquer comme configuré et démarrer
         hasConfiguredInitially = true
         isPresented = false
         
-        // Feedback de succès
         cameraManager.playSuccessFeedback()
-        
-        // Démarrer la session
         cameraManager.startSession()
         
+        // Plus d'activation automatique de l'interaction vocale
+        
         print("✅ Configuration initiale appliquée:")
-        print("   - Mode performance: \(selectedPerformanceMode.displayName) (skip: \(selectedPerformanceMode.skipFrames))")
         print("   - LiDAR: \(enableLiDAR ? "✅" : "❌")")
         print("   - Vibrations: \(enableVibrations ? "✅" : "❌")")
+        print("   - Interaction vocale: \(enableVoiceInteraction ? "✅ (touchez le micro)" : "❌")")
     }
     
     private func skipConfiguration() {
-        // Configuration par défaut avec mode normal
-        selectedPerformanceMode = .normal
-        cameraManager.setSkipFrames(selectedPerformanceMode.skipFrames)
-        
         if cameraManager.lidarAvailable {
             let _ = cameraManager.enableLiDAR()
             proximityAlertsEnabled = true
             cameraManager.enableProximityAlerts(true)
         }
         
+        voiceInteractionEnabled = true
         hasConfiguredInitially = true
         isPresented = false
         cameraManager.startSession()
         
-        print("⚡ Configuration par défaut appliquée: Mode \(selectedPerformanceMode.displayName)")
+        print("⚡ Configuration par défaut appliquée: Tout activé (interaction vocale sur demande)")
     }
 }
 
-// MARK: - Bouton de Mode de Performance pour Configuration Initiale
-struct InitialPerformanceModeButton: View {
-    let mode: PerformanceMode
-    let isSelected: Bool
-    let onTap: () -> Void
-    
-    var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 6) {
-                Image(systemName: mode.icon)
-                    .font(.title3)
-                    .foregroundColor(isSelected ? .white : mode.color)
-                
-                Text(mode.displayName)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(isSelected ? .white : mode.color)
-                
-                Text("\(mode.skipFrames)")
-                    .font(.caption2)
-                    .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isSelected ? mode.color : Color.clear)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(mode.color, lineWidth: isSelected ? 0 : 2)
-                    )
-            )
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-}
-
-// MARK: - Vue d'option de configuration (inchangée)
 struct ConfigurationOptionView: View {
     let icon: String
     let iconColor: Color
@@ -1121,13 +1096,11 @@ struct ConfigurationOptionView: View {
     
     var body: some View {
         HStack(spacing: 16) {
-            // Icône
             Image(systemName: icon)
                 .font(.title)
                 .foregroundColor(iconColor)
                 .frame(width: 40, height: 40)
             
-            // Contenu
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.headline)
@@ -1141,7 +1114,6 @@ struct ConfigurationOptionView: View {
             
             Spacer()
             
-            // Toggle
             Toggle("", isOn: $isEnabled)
                 .disabled(!isAvailable)
                 .scaleEffect(1.1)

@@ -7,7 +7,7 @@ class ObjectDetectionManager {
     private var model: VNCoreMLModel?
     
     // Configuration de détection améliorée
-    private let confidenceThreshold: Float = 0.5
+    private let confidenceThreshold: Float = 0.6
     private let maxDetections = 10
     
     // Classes à ignorer par défaut pour conduite autonome (modifiable)
@@ -716,18 +716,18 @@ class ObjectDetectionManager {
     ) {
         let pureInferenceTime = totalTime - postProcessTime - preprocessTime
         
-        print("🎯 YOLOv11\(withLiDAR ? " + LiDAR" : "") + Tracking: \(detections.count) objets détectés")
-        print("⏱️ Temps d'exécution:")
-        if preprocessTime > 0 {
-            print("   - Préprocessing: \(String(format: "%.1f", preprocessTime))ms")
-        }
-        print("   - Inférence pure: \(String(format: "%.1f", pureInferenceTime))ms")
-        print("   - Post-processing + Tracking: \(String(format: "%.1f", postProcessTime))ms")
-        print("   - TOTAL: \(String(format: "%.1f", totalTime))ms")
-        print("   - FPS estimé: \(String(format: "%.1f", 1000.0 / totalTime))")
+       // print("🎯 YOLOv11\(withLiDAR ? " + LiDAR" : "") + Tracking: \(detections.count) objets détectés")
+        //print("⏱️ Temps d'exécution:")
+       // if preprocessTime > 0 {
+        //    print("   - Préprocessing: \(String(format: "%.1f", preprocessTime))ms")
+        //}
+        //print("   - Inférence pure: \(String(format: "%.1f", pureInferenceTime))ms")
+        //print("   - Post-processing + Tracking: \(String(format: "%.1f", postProcessTime))ms")
+        //print("   - TOTAL: \(String(format: "%.1f", totalTime))ms")
+        //print("   - FPS estimé: \(String(format: "%.1f", 1000.0 / totalTime))")
         
         if let avgTime = getAverageInferenceTime() {
-            print("   - Moyenne (dernières \(inferenceHistory.count)): \(String(format: "%.1f", avgTime))ms")
+          //  print("   - Moyenne (dernières \(inferenceHistory.count)): \(String(format: "%.1f", avgTime))ms")
         }
         
         // Statistiques LiDAR
@@ -735,7 +735,7 @@ class ObjectDetectionManager {
             guard let self = self else { return }
             if withLiDAR && self.totalDistanceMeasurements > 0 {
                 let successRate = Float(self.successfulDistanceMeasurements) / Float(self.totalDistanceMeasurements) * 100
-                print("📏 LiDAR: \(self.successfulDistanceMeasurements)/\(self.totalDistanceMeasurements) mesures réussies (\(String(format: "%.1f", successRate))%)")
+           //     print("📏 LiDAR: \(self.successfulDistanceMeasurements)/\(self.totalDistanceMeasurements) mesures réussies (\(String(format: "%.1f", successRate))%)")
             }
         }
         
@@ -755,10 +755,10 @@ class ObjectDetectionManager {
         // Afficher les objets importants si il y en a
         let importantObjects = getTopImportantObjects(maxCount: 3)
         if !importantObjects.isEmpty {
-            print("🏆 Top objets importants:")
+           // print("🏆 Top objets importants:")
             for (index, item) in importantObjects.enumerated() {
                 let score = String(format: "%.1f", item.score * 100)
-                print("   \(index + 1). #\(item.object.trackingNumber) \(item.object.label): \(score)%")
+               // print("   \(index + 1). #\(item.object.trackingNumber) \(item.object.label): \(score)%")
             }
         }
     }
