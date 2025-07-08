@@ -29,6 +29,8 @@ extension Color {
 }
 
 struct LoadingView: View {
+    let logoNamespace: Namespace.ID // Paramètre pour le match move
+    
     @State private var eyeOpacity: Double = 0
     @State private var eyeScale: CGFloat = 0.3
     @State private var logoScale: CGFloat = 0.5
@@ -117,6 +119,7 @@ struct LoadingView: View {
                         .shadow(color: Color(hex: "5ee852").opacity(0.6), radius: 15, x: 0, y: 8)
                         .shadow(color: Color(hex: "56c228").opacity(0.4), radius: 25, x: 0, y: 12)
                         .shadow(color: .white.opacity(0.3), radius: 35, x: 0, y: 15)
+                        .matchedGeometryEffect(id: "logoBase", in: logoNamespace) // Match move pour le logo
                     
                     // Œil qui apparaît progressivement avec effet spectaculaire
                     ZStack {
@@ -145,15 +148,16 @@ struct LoadingView: View {
                         Image("eye")
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .offset(x: -2, y: 0)
                             .frame(width: 42, height: 42) // Taille réduite
                             .rotationEffect(.degrees(11)) // Rotation de 11° pour alignement
+                            .offset(x: -3, y: 0) // Même décalage que dans ContentView
                             .opacity(eyeBlink ? 0.1 : eyeOpacity) // Effet de clignement
                             .scaleEffect(eyeBlink ? CGSize(width: 1.0, height: 0.1) : CGSize(width: eyeScale, height: eyeScale)) // Clignement vertical
                             .shadow(color: Color(hex: "5ee852").opacity(0.8), radius: 10, x: 0, y: 0)
                             .shadow(color: Color(hex: "56c228").opacity(0.6), radius: 20, x: 0, y: 0)
                             .shadow(color: .white.opacity(0.4), radius: 30, x: 0, y: 0)
                             .scaleEffect(pulseAnimation ? 1.1 : 1.0)
+                            .matchedGeometryEffect(id: "logoEye", in: logoNamespace) // Match move pour l'œil
                     }
                 }
                 .onAppear {
@@ -302,29 +306,48 @@ struct LoadingView: View {
     }
 }
 
-// Vue principale qui gère le chargement
+// Vue principale qui gère le chargement avec match move et questionnaire
 struct MainAppView: View {
+    @StateObject private var questionnaireManager = QuestionnaireManager()
     @State private var isLoading = true
+    @State private var showQuestionnaire = false
+    @Namespace private var logoAnimation // Namespace pour le match move
     
     var body: some View {
-        Group {
+        ZStack {
             if isLoading {
-                LoadingView()
+                LoadingView(logoNamespace: logoAnimation)
                     .onAppear {
                         // Durée totale du chargement (6 secondes pour profiter de l'animation)
                         DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
                             withAnimation(.easeInOut(duration: 1.0)) {
                                 isLoading = false
+                                // Vérifier si le questionnaire a été complété
+                                checkQuestionnaireStatus()
                             }
                         }
                     }
+            } else if showQuestionnaire {
+                // Première utilisation → Questionnaire
+                QuestionnaireView()
             } else {
+                // Utilisateur existant → App principale avec match move
                 ContentView()
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.8).combined(with: .opacity).combined(with: .move(edge: .bottom)),
-                        removal: .scale(scale: 1.2).combined(with: .opacity).combined(with: .move(edge: .top))
-                    ))
             }
+        }
+    }
+    
+    private func checkQuestionnaireStatus() {
+        let hasCompleteProfile = questionnaireManager.responses.count == 5
+        
+        if hasCompleteProfile {
+            // Profil complet → Aller directement à l'app
+            print("✅ Profil utilisateur complet (\(questionnaireManager.responses.count)/5 réponses)")
+            showQuestionnaire = false
+        } else {
+            // Première utilisation ou profil incomplet → Questionnaire
+            print("📝 Première utilisation ou profil incomplet (\(questionnaireManager.responses.count)/5 réponses)")
+            showQuestionnaire = true
         }
     }
 }

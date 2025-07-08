@@ -4,7 +4,6 @@
 //
 //  Created by Samy 📍 on 04/07/2025.
 //
-
 import SwiftUI
 import AVFoundation
 import Speech
@@ -37,6 +36,7 @@ struct DetectionView: View {
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var voiceSynthesisManager = VoiceSynthesisManager()
     @StateObject private var voiceInteractionManager = VoiceInteractionManager()
+    @StateObject private var questionnaireManager = QuestionnaireManager()
     
     @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
     @State private var showingStats = false
@@ -52,10 +52,6 @@ struct DetectionView: View {
     // Timer pour rafraîchir le leaderboard
     @State private var importantObjectsTimer: Timer?
     
-    // Configuration initiale
-    @State private var showingInitialConfiguration = false
-    @State private var hasConfiguredInitially = false
-    
     // États pour la synthèse vocale et interaction
     @State private var voiceEnabled = true
     @State private var voiceInteractionEnabled = true
@@ -68,6 +64,7 @@ struct DetectionView: View {
         ZStack {
             CameraPreviewView(cameraManager: cameraManager)
                 .onAppear {
+                    setupFromQuestionnaire()
                     setupManagers()
                     startImportantObjectsTimer()
                     
@@ -79,11 +76,7 @@ struct DetectionView: View {
                 }
                 .onReceive(cameraManager.$hasPermission) { hasPermission in
                     if hasPermission {
-                        if !hasConfiguredInitially {
-                            showingInitialConfiguration = true
-                        } else {
-                            cameraManager.startSession()
-                        }
+                        cameraManager.startSession()
                     }
                 }
                 .onDisappear {
@@ -262,19 +255,52 @@ struct DetectionView: View {
             Text(getLiDARInfoMessage())
         }
         .sheet(isPresented: $showingSettings) {
-            CameraDetectionSettingsView(isPresented: $showingSettings, cameraManager: cameraManager)
-        }
-        .sheet(isPresented: $showingInitialConfiguration) {
-            InitialConfigurationView(
-                isPresented: $showingInitialConfiguration,
-                hasConfiguredInitially: $hasConfiguredInitially,
-                cameraManager: cameraManager,
-                proximityAlertsEnabled: $proximityAlertsEnabled,
-                voiceInteractionEnabled: $voiceInteractionEnabled
-            )
+            ParametersView(isPresented: $showingSettings)
         }
         .animation(.easeInOut(duration: 0.3), value: showingStats)
         .animation(.easeInOut(duration: 0.3), value: showingImportantObjects)
+    }
+    
+    // MARK: - Configuration depuis le questionnaire
+    private func setupFromQuestionnaire() {
+        let responses = questionnaireManager.responses
+        
+        // Question 1: Navigation apps → Pas utilisée pour l'instant
+        
+        // Question 2: Alertes d'obstacles à distance → Active LiDAR + alertes proximité
+        if let wantsObstacleAlerts = responses[2], wantsObstacleAlerts {
+            if cameraManager.lidarAvailable {
+                let _ = cameraManager.enableLiDAR()
+                proximityAlertsEnabled = true
+                cameraManager.enableProximityAlerts(true)
+                print("✅ LiDAR et alertes proximité activés (réponse question 2)")
+            }
+        } else {
+            proximityAlertsEnabled = false
+            cameraManager.enableProximityAlerts(false)
+            print("❌ Alertes proximité désactivées (réponse question 2)")
+        }
+        
+        // Question 3: Préférence vocale vs vibrations → Active/désactive synthèse vocale
+        if let prefersVoice = responses[3] {
+            voiceEnabled = prefersVoice
+            if prefersVoice {
+                print("✅ Synthèse vocale activée (réponse question 3)")
+            } else {
+                print("❌ Synthèse vocale désactivée (réponse question 3)")
+            }
+        }
+        
+        // Questions 4 et 5: Peuvent être utilisées pour d'autres configurations futures
+        
+        // L'interaction vocale reste toujours activée (question à la demande)
+        voiceInteractionEnabled = true
+        
+        print("🎯 Configuration appliquée depuis le questionnaire:")
+        print("   - LiDAR: \(cameraManager.isLiDAREnabled ? "✅" : "❌")")
+        print("   - Alertes proximité: \(proximityAlertsEnabled ? "✅" : "❌")")
+        print("   - Synthèse vocale: \(voiceEnabled ? "✅" : "❌")")
+        print("   - Interaction vocale: ✅ (appui long)")
     }
     
     // MARK: - HUD Ultra-Compact (UNE SEULE LIGNE)
@@ -564,12 +590,11 @@ struct DetectionView: View {
             .cornerRadius(4)
             .disabled(!voiceInteractionEnabled)
             
-            Button("Config") {
-                hasConfiguredInitially = false
-                showingInitialConfiguration = true
-                cameraManager.stopSession()
-                voiceSynthesisManager.stopSpeaking()
-                voiceInteractionManager.stopContinuousListening()
+            Button("Quest") {
+                print("📝 Réponses du questionnaire:")
+                for (id, response) in questionnaireManager.responses {
+                    print("   Question \(id): \(response ? "OUI" : "NON")")
+                }
             }
             .font(.caption2)
             .foregroundColor(.white)
@@ -658,11 +683,6 @@ struct DetectionView: View {
             self.boundingBoxes = newDetections
         }
         
-        if cameraManager.lidarAvailable {
-            let _ = cameraManager.enableLiDAR()
-        }
-        
-        proximityAlertsEnabled = cameraManager.isProximityAlertsEnabled()
         voiceInteractionManager.setVoiceSynthesisManager(voiceSynthesisManager)
     }
     
@@ -760,6 +780,11 @@ struct DetectionView: View {
             • Parlez après le bip sonore : "Y a-t-il une voiture ?", "Où est le feu ?", "Décris la scène"
             • Une question à la fois, pas d'écoute continue
             • 100% privé et local, aucune donnée envoyée sur internet
+            
+            ⚙️ Configuration automatique:
+            • Vos préférences du questionnaire sont appliquées automatiquement
+            • Question 2 (alertes obstacles) → Active LiDAR + vibrations
+            • Question 3 (préférence vocale) → Active/désactive synthèse vocale
             """
         } else {
             return """
@@ -777,6 +802,10 @@ struct DetectionView: View {
             🗣️ La synthèse vocale fonctionne avec ou sans LiDAR.
             
             🎤 L'interaction vocale fonctionne avec ou sans LiDAR.
+            
+            ⚙️ Configuration automatique:
+            • Vos préférences du questionnaire sont appliquées automatiquement
+            • Vous pouvez modifier manuellement ces réglages ici
             """
         }
     }
@@ -922,198 +951,7 @@ struct VoiceListeningIndicator: View {
     }
 }
 
-
-
-// MARK: - Configuration Initiale
-
-struct InitialConfigurationView: View {
-    @Binding var isPresented: Bool
-    @Binding var hasConfiguredInitially: Bool
-    let cameraManager: CameraManager
-    @Binding var proximityAlertsEnabled: Bool
-    @Binding var voiceInteractionEnabled: Bool
-    
-    @State private var enableLiDAR = true
-    @State private var enableVibrations = true
-    @State private var enableVoiceInteraction = true
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 24) {
-                VStack(spacing: 16) {
-                    Image(systemName: "gearshape.2.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(.blue)
-                    
-                    Text("Configuration Initiale")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                    
-                    Text("Configurez votre expérience de détection avec interaction vocale")
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.top)
-                
-                VStack(spacing: 20) {
-                    ConfigurationOptionView(
-                        icon: "location.fill",
-                        iconColor: enableLiDAR ? .blue : .gray,
-                        title: "LiDAR",
-                        description: cameraManager.lidarAvailable ?
-                            "Mesure des distances en temps réel et alertes de proximité" :
-                            "LiDAR non disponible sur cet appareil",
-                        isEnabled: $enableLiDAR,
-                        isAvailable: cameraManager.lidarAvailable
-                    )
-                    
-                    ConfigurationOptionView(
-                        icon: "iphone.radiowaves.left.and.right",
-                        iconColor: enableVibrations ? .orange : .gray,
-                        title: "Alertes de Proximité",
-                        description: enableLiDAR ?
-                            "Vibrations lorsque des objets sont détectés à proximité" :
-                            "Nécessite LiDAR pour fonctionner",
-                        isEnabled: $enableVibrations,
-                        isAvailable: enableLiDAR
-                    )
-                    
-                    ConfigurationOptionView(
-                        icon: "mic.fill",
-                        iconColor: enableVoiceInteraction ? .purple : .gray,
-                        title: "Interaction Vocale",
-                        description: "Appui long sur l'écran pour poser des questions : 'Y a-t-il une voiture ?', 'Décris la scène'",
-                        isEnabled: $enableVoiceInteraction,
-                        isAvailable: true
-                    )
-                }
-                
-                VStack(spacing: 16) {
-                    Button(action: {
-                        applyConfiguration()
-                    }) {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.title2)
-                            Text("Commencer la Détection")
-                                .font(.headline)
-                                .fontWeight(.semibold)
-                        }
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .cornerRadius(12)
-                    }
-                    
-                    Button("Configurer plus tard") {
-                        skipConfiguration()
-                    }
-                    .font(.body)
-                    .foregroundColor(.secondary)
-                }
-                .padding(.bottom)
-                
-                Spacer()
-            }
-            .padding(.horizontal)
-            .navigationBarHidden(true)
-        }
-        .onAppear {
-            enableLiDAR = cameraManager.lidarAvailable
-            enableVibrations = cameraManager.lidarAvailable
-            enableVoiceInteraction = true
-        }
-        .onChange(of: enableLiDAR) { lidarEnabled in
-            if !lidarEnabled {
-                enableVibrations = false
-            }
-        }
-    }
-    
-    private func applyConfiguration() {
-        if enableLiDAR && cameraManager.lidarAvailable {
-            let _ = cameraManager.enableLiDAR()
-        } else {
-            cameraManager.disableLiDAR()
-        }
-        
-        proximityAlertsEnabled = enableVibrations && enableLiDAR
-        cameraManager.enableProximityAlerts(proximityAlertsEnabled)
-        voiceInteractionEnabled = enableVoiceInteraction
-        
-        hasConfiguredInitially = true
-        isPresented = false
-        
-        cameraManager.playSuccessFeedback()
-        cameraManager.startSession()
-        
-        print("✅ Configuration initiale appliquée:")
-        print("   - LiDAR: \(enableLiDAR ? "✅" : "❌")")
-        print("   - Vibrations: \(enableVibrations ? "✅" : "❌")")
-        print("   - Interaction vocale: \(enableVoiceInteraction ? "✅ (touchez le micro)" : "❌")")
-    }
-    
-    private func skipConfiguration() {
-        if cameraManager.lidarAvailable {
-            let _ = cameraManager.enableLiDAR()
-            proximityAlertsEnabled = true
-            cameraManager.enableProximityAlerts(true)
-        }
-        
-        voiceInteractionEnabled = true
-        hasConfiguredInitially = true
-        isPresented = false
-        cameraManager.startSession()
-        
-        print("⚡ Configuration par défaut appliquée: Tout activé (interaction vocale sur demande)")
-    }
-}
-
-struct ConfigurationOptionView: View {
-    let icon: String
-    let iconColor: Color
-    let title: String
-    let description: String
-    @Binding var isEnabled: Bool
-    let isAvailable: Bool
-    
-    var body: some View {
-        HStack(spacing: 16) {
-            Image(systemName: icon)
-                .font(.title)
-                .foregroundColor(iconColor)
-                .frame(width: 40, height: 40)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(isAvailable ? .primary : .secondary)
-                
-                Text(description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.leading)
-            }
-            
-            Spacer()
-            
-            Toggle("", isOn: $isEnabled)
-                .disabled(!isAvailable)
-                .scaleEffect(1.1)
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(UIColor.systemBackground))
-                .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
-        )
-        .opacity(isAvailable ? 1.0 : 0.6)
-    }
-}
-
-// MARK: - Settings View (placeholder - tu peux garder l'existante si tu en as une)
+// MARK: - Settings View (simplifiée)
 
 struct CameraDetectionSettingsView: View {
     @Binding var isPresented: Bool
@@ -1121,18 +959,40 @@ struct CameraDetectionSettingsView: View {
     
     var body: some View {
         NavigationView {
-            VStack {
+            VStack(spacing: 20) {
                 Text("Paramètres de détection")
                     .font(.title)
                     .padding()
                 
-                Text("Ici tu peux ajouter tes réglages personnalisés")
-                    .font(.body)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("ℹ️ Configuration automatique")
+                        .font(.headline)
+                    
+                    Text("L'application se configure automatiquement selon vos réponses au questionnaire initial. Vous pouvez modifier les paramètres manuellement dans l'interface de détection.")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.leading)
+                    
+                    Divider()
+                    
+                    Text("🎯 Correspondance questionnaire:")
+                        .font(.headline)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• Question 2 (alertes obstacles) → LiDAR + vibrations")
+                        Text("• Question 3 (préférence vocale) → Synthèse vocale")
+                        Text("• Interaction vocale → Toujours disponible (appui long)")
+                    }
+                    .font(.caption)
                     .foregroundColor(.secondary)
-                    .padding()
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(12)
                 
                 Spacer()
             }
+            .padding()
             .navigationTitle("Paramètres")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -5,6 +5,7 @@
 //  Created by Samy 📍 on 18/06/2025.
 //  Updated with LiDAR integration - 19/06/2025
 //  Updated with Object Tracking - 20/06/2025
+//  Updated with new class management system - 08/07/2025
 //
 
 import AVFoundation
@@ -37,7 +38,7 @@ class CameraManager: NSObject, ObservableObject {
     private let hapticManager = HapticManager()  // ← Manager pour les vibrations
     
     // Configuration des skip frames
-    private var skipFrameCount = 1  
+    private var skipFrameCount = 1
     private var frameCounter = 0
     
     // Variables pour la synchronisation des données
@@ -225,6 +226,7 @@ class CameraManager: NSObject, ObservableObject {
     func getImportanceStats() -> String {
         return objectDetectionManager.getImportanceStats()
     }
+    
     func getPerformanceStats() -> String {
         var stats = objectDetectionManager.getPerformanceStats()
         
@@ -253,12 +255,36 @@ class CameraManager: NSObject, ObservableObject {
         return skipFrameCount
     }
     
-    func setActiveClasses(_ classes: [String]) {
-        objectDetectionManager.setActiveClasses(classes)
+    // MODIFIÉ: Nouveau système de gestion des classes
+    func setEnabledClasses(_ classes: Set<String>) {
+        objectDetectionManager.setEnabledClasses(classes)
+        print("✅ Classes activées mises à jour: \(classes.count) classes")
     }
     
-    func getActiveClasses() -> [String] {
-        return objectDetectionManager.getActiveClasses()
+    func addIgnoredClass(_ className: String) {
+        objectDetectionManager.addIgnoredClass(className)
+    }
+    
+    func removeIgnoredClass(_ className: String) {
+        objectDetectionManager.removeIgnoredClass(className)
+    }
+    
+    func getIgnoredClasses() -> [String] {
+        return objectDetectionManager.getIgnoredClasses()
+    }
+    
+    func clearIgnoredClasses() {
+        objectDetectionManager.clearIgnoredClasses()
+    }
+    
+    // AJOUTÉ: Accès aux classes du modèle
+    func getAvailableClasses() -> [String] {
+        return objectDetectionManager.getAvailableClasses()
+    }
+    
+    // AJOUTÉ: Accès statique aux classes du modèle
+    static func getAllModelClasses() -> [String] {
+        return ObjectDetectionManager.getAllModelClasses()
     }
     
     // MARK: - Setup

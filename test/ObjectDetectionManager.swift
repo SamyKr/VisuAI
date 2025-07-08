@@ -1,18 +1,51 @@
+//
+//  ObjectDetectionManager.swift
+//  YOLOv11 Object Detection with LiDAR and Tracking
+//
+//  Gestionnaire principal pour la détection d'objets utilisant CoreML Vision Framework
+//  Intègre le tracking d'objets, les mesures LiDAR et un système de scoring d'importance
+//  Compatible avec les modèles YOLOv11 compilés en .mlmodelc
+//
+//  Fonctionnalités:
+//  - Détection d'objets en temps réel (49 classes prédéfinies)
+//  - Tracking multi-objets avec ID persistants
+//  - Mesures de distance LiDAR
+//  - Système de scoring d'importance pour l'accessibilité
+//  - Statistiques de performance détaillées
+//  - Thread-safe avec queues dédiées
+//  - Liste globale des classes du modèle accessible via MODEL_CLASSES
+//
+
 import CoreML
 import Vision
 import UIKit
 import AVFoundation
 
-class ObjectDetectionManager {
+class ObjectDetectionManager: ObservableObject {
     private var model: VNCoreMLModel?
+    
+    // AJOUTÉ: Classes du modèle YOLOv11 - Liste globale et statique
+    static let MODEL_CLASSES: [String] = [
+        "sidewalk", "road", "crosswalk", "driveway", "bike_lane", "parking_area",
+        "rail_track", "service_lane", "wall", "fence", "curb", "guard_rail",
+        "temporary_barrier", "barrier_other", "pole", "car", "truck", "bus",
+        "motorcycle", "bicycle", "slow_vehicle", "vehicle_group", "rail_vehicle",
+        "boat", "person", "cyclist", "motorcyclist", "traffic_light", "traffic_sign",
+        "street_light", "traffic_cone", "bench", "trash_can", "fire_hydrant",
+        "mailbox", "parking_meter", "bike_rack", "phone_booth", "pothole",
+        "manhole", "catch_basin", "water_valve", "junction_box", "building",
+        "bridge", "tunnel", "garage", "vegetation", "water", "terrain", "animals"
+    ]
+    
+    // Classes du modèle (initialisées avec la liste statique)
+    @Published var modelClasses: [String] = MODEL_CLASSES
     
     // Configuration de détection améliorée
     private let confidenceThreshold: Float = 0.6
     private let maxDetections = 10
     
-    // Classes à ignorer par défaut pour conduite autonome (modifiable)
-    private var ignoredClasses = Set(["building", "vegetation", "ground", "water"])
-    private var activeClasses: Set<String> = []
+    // Classes à ignorer par défaut
+    private var ignoredClasses = Set(["building", "vegetation", "terrain", "water"])
     
     // Système de tracking intégré
     private let objectTracker = ObjectTracker()
@@ -129,6 +162,7 @@ class ObjectDetectionManager {
                 DispatchQueue.main.async {
                     self.model = visionModel
                     print("✅ Modèle VNCoreMLModel chargé avec succès")
+                    print("✅ Classes disponibles: \(ObjectDetectionManager.MODEL_CLASSES.count) classes")
                 }
                 
             } catch {
@@ -138,6 +172,31 @@ class ObjectDetectionManager {
                 }
             }
         }
+    }
+    
+    // AJOUTÉ: Méthodes publiques pour la gestion des classes
+    func getAvailableClasses() -> [String] {
+        return modelClasses
+    }
+    
+    // Méthode statique pour accéder aux classes depuis n'importe où
+    static func getAllModelClasses() -> [String] {
+        return MODEL_CLASSES
+    }
+    
+    func setEnabledClasses(_ classes: Set<String>) {
+        // Logique inversée : toutes les classes non activées deviennent ignorées
+        let allClasses = Set(ObjectDetectionManager.MODEL_CLASSES)
+        let classesToIgnore = allClasses.subtracting(classes)
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.ignoredClasses = classesToIgnore
+            print("✅ Classes activées: \(classes.count), ignorées: \(classesToIgnore.count)")
+        }
+    }
+    
+    func isModelLoaded() -> Bool {
+        return model != nil
     }
     
     // MARK: - Detection Methods (Legacy) - Updated for tracking
@@ -587,14 +646,14 @@ class ObjectDetectionManager {
             }
         }
         
-        // Ajouter info sur les classes actives/ignorées
-        let allowedClasses = getActiveClasses().isEmpty ? "toutes sauf ignorées" : getActiveClasses().joined(separator: ", ")
-        let ignoredClasses = getIgnoredClasses().joined(separator: ", ")
+        // Ajouter info sur les classes ignorées
+        let ignoredClassesList = getIgnoredClasses().joined(separator: ", ")
+        let activatedClassesCount = ObjectDetectionManager.MODEL_CLASSES.count - ignoredClasses.count
         
         stats += "\n\n⚙️ Configuration des classes:"
-        stats += "\n   - Classes autorisées: \(allowedClasses)"
-        if !ignoredClasses.isEmpty {
-            stats += "\n   - Classes ignorées: \(ignoredClasses)"
+        stats += "\n   - Classes activées: \(activatedClassesCount)/\(ObjectDetectionManager.MODEL_CLASSES.count)"
+        if !ignoredClassesList.isEmpty {
+            stats += "\n   - Classes ignorées: \(ignoredClassesList)"
         }
         
         return stats
@@ -855,12 +914,21 @@ class ObjectDetectionManager {
     func addIgnoredClass(_ className: String) {
         DispatchQueue.main.async { [weak self] in
             self?.ignoredClasses.insert(className.lowercased())
+            print("🚫 Classe '\(className)' ajoutée aux classes ignorées")
         }
     }
     
     func removeIgnoredClass(_ className: String) {
         DispatchQueue.main.async { [weak self] in
             self?.ignoredClasses.remove(className.lowercased())
+            print("✅ Classe '\(className)' retirée des classes ignorées")
+        }
+    }
+    
+    func clearIgnoredClasses() {
+        DispatchQueue.main.async { [weak self] in
+            self?.ignoredClasses.removeAll()
+            print("🔄 Toutes les classes ignorées ont été supprimées")
         }
     }
     
@@ -868,27 +936,8 @@ class ObjectDetectionManager {
         return Array(ignoredClasses).sorted()
     }
     
-    func setActiveClasses(_ classes: [String]) {
-        DispatchQueue.main.async { [weak self] in
-            self?.activeClasses = Set(classes.map { $0.lowercased() })
-        }
-    }
-    
-    func getActiveClasses() -> [String] {
-        return Array(activeClasses).sorted()
-    }
-    
     private func isClassAllowed(_ className: String) -> Bool {
         let lowercaseName = className.lowercased()
-        
-        if ignoredClasses.contains(lowercaseName) {
-            return false
-        }
-        
-        if activeClasses.isEmpty {
-            return true
-        }
-        
-        return activeClasses.contains(lowercaseName)
+        return !ignoredClasses.contains(lowercaseName)
     }
 }
