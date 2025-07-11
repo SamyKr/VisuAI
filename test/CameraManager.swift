@@ -36,6 +36,7 @@ class CameraManager: NSObject, ObservableObject {
     private let objectDetectionManager = ObjectDetectionManager()
     private let lidarManager = LiDARManager()
     private let hapticManager = HapticManager()  // ← Manager pour les vibrations
+    private var voiceSynthesisManager: VoiceSynthesisManager?
     
     // Configuration des skip frames
     private var skipFrameCount = 1
@@ -99,6 +100,16 @@ class CameraManager: NSObject, ObservableObject {
             previewLayer?.videoGravity = .resizeAspectFill
         }
         return previewLayer!
+    }
+    
+    // MARK: -- Update Distance Critique
+    func setVoiceSynthesisManager(_ manager: VoiceSynthesisManager) {
+        self.voiceSynthesisManager = manager
+    }
+    
+    func updateCriticalDistance(_ distance: Float) {
+        // Transmettre au VoiceSynthesisManager
+        voiceSynthesisManager?.updateCriticalDistance(distance)
     }
     
     // MARK: - Tracking Controls

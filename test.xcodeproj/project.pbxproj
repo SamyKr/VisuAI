@@ -30,6 +30,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		2EEAB4D12E20C32D0081F33E /* Exceptions for "testUITests" folder in "test" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				indicvoca.wav,
+			);
+			target = 2E9A6A392E023130001058E4 /* test */;
+		};
 		2EFC59C62E03C10C001EE991 /* Exceptions for "test" folder in "test" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -74,6 +81,7 @@
 		2E9A6A572E023131001058E4 /* testUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
+				2EEAB4D12E20C32D0081F33E /* Exceptions for "testUITests" folder in "test" target */,
 				2E9A6A752E023565001058E4 /* Exceptions for "testUITests" folder in "Compile Sources" phase from "test" target */,
 				2E9A6A772E0235F3001058E4 /* Exceptions for "testUITests" folder in "Copy Bundle Resources" phase from "test" target */,
 			);
@@ -435,8 +443,9 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = test/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSCameraUsageDescription = 1.0;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "$(MARKETING_VERSION)";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = 1.0;
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -469,8 +478,9 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = test/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
 				INFOPLIST_KEY_NSCameraUsageDescription = 1.0;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "$(MARKETING_VERSION)";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = 1.0;
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

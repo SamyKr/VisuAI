@@ -257,15 +257,117 @@ class VoiceInteractionManager: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Son d'activation
+    
     private func setupBeepSound() {
-        let beepURL = createBeepSound()
+        // 🎵 NOUVEAU : Chercher d'abord le son personnalisé de l'utilisateur
+        let customSoundURL = getCustomSoundURL()
+        
         do {
-            beepPlayer = try AVAudioPlayer(contentsOf: beepURL)
+            if FileManager.default.fileExists(atPath: customSoundURL.path) {
+                // Utiliser le son personnalisé
+                beepPlayer = try AVAudioPlayer(contentsOf: customSoundURL)
+                print("✅ Son personnalisé chargé: \(customSoundURL.lastPathComponent)")
+            } else {
+                // Fallback vers le bip généré
+                let beepURL = createBeepSound()
+                beepPlayer = try AVAudioPlayer(contentsOf: beepURL)
+                print("🔊 Bip généré utilisé (son personnalisé non trouvé)")
+            }
+            
             beepPlayer?.prepareToPlay()
-            beepPlayer?.volume = 0.8
+            beepPlayer?.volume = 1.0
         } catch {
-            print("❌ Erreur création beep: \(error)")
+            print("❌ Erreur création son: \(error)")
         }
+    }
+    
+    private func getCustomSoundURL() -> URL {
+
+        let possibleBaseNames = [
+            "indicvoca",           // ← NOUVEAU : Votre fichier !
+        ]
+        
+        let possibleExtensions = ["wav", "mp3", "m4a"]
+        
+        // 🔍 DEBUG : Lister tous les fichiers audio dans le bundle
+        debugBundleContents()
+        
+        // 🏠 PREMIÈRE PRIORITÉ : Chercher dans le bundle de l'app (plus simple)
+        for baseName in possibleBaseNames {
+            for ext in possibleExtensions {
+                if let bundleURL = Bundle.main.url(forResource: baseName, withExtension: ext) {
+                    print("🎵 Son personnalisé trouvé dans le bundle: \(baseName).\(ext)")
+                    return bundleURL
+                }
+            }
+        }
+        
+        // 📁 DEUXIÈME PRIORITÉ : Chercher dans le dossier Documents
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        
+        for baseName in possibleBaseNames {
+            for ext in possibleExtensions {
+                let soundURL = documentsPath.appendingPathComponent("\(baseName).\(ext)")
+                if FileManager.default.fileExists(atPath: soundURL.path) {
+                    print("🎵 Son personnalisé trouvé dans Documents: \(baseName).\(ext)")
+                    return soundURL
+                }
+            }
+        }
+        
+        print("⚠️ Aucun son personnalisé trouvé. Recherché:")
+        print("   📱 Dans le bundle: \(possibleBaseNames.map { "\($0).wav/mp3/m4a" }.joined(separator: ", "))")
+        print("   📁 Dans Documents: \(possibleBaseNames.map { "\($0).wav/mp3/m4a" }.joined(separator: ", "))")
+        
+        // Fallback : retourner un chemin dans Documents pour le bip généré
+        return documentsPath.appendingPathComponent("custom_beep.wav")
+    }
+    
+    // 🔍 DEBUG : Fonction pour lister le contenu du bundle
+    private func debugBundleContents() {
+        print("🔍 === DEBUG BUNDLE CONTENTS ===")
+        
+        // Lister tous les fichiers du bundle principal
+        if let bundlePath = Bundle.main.resourcePath {
+            do {
+                let bundleContents = try FileManager.default.contentsOfDirectory(atPath: bundlePath)
+                
+                // Filtrer les fichiers audio
+                let audioFiles = bundleContents.filter { file in
+                    let ext = (file as NSString).pathExtension.lowercased()
+                    return ["wav", "mp3", "m4a", "aiff", "caf"].contains(ext)
+                }
+                
+                print("📱 Fichiers audio dans le bundle (\(audioFiles.count)) :")
+                if audioFiles.isEmpty {
+                    print("   ❌ Aucun fichier audio trouvé")
+                } else {
+                    for file in audioFiles.sorted() {
+                        print("   ✅ \(file)")
+                    }
+                }
+                
+                // Vérifier spécifiquement indicvoca.wav
+                if bundleContents.contains("indicvoca.wav") {
+                    print("🎵 TROUVÉ : indicvoca.wav est bien dans le bundle ! ✅")
+                } else {
+                    print("❌ indicvoca.wav NON TROUVÉ dans le bundle")
+                }
+                
+            } catch {
+                print("❌ Erreur lecture bundle: \(error)")
+            }
+        }
+        
+        // Test direct de votre fichier
+        if let indicvocaURL = Bundle.main.url(forResource: "indicvoca", withExtension: "wav") {
+            print("🎯 Test direct: indicvoca.wav accessible à \(indicvocaURL)")
+        } else {
+            print("🎯 Test direct: indicvoca.wav NON accessible via Bundle.main")
+        }
+        
+        print("🔍 === FIN DEBUG BUNDLE ===")
     }
 
     private func createBeepSound() -> URL {
@@ -394,14 +496,18 @@ class VoiceInteractionManager: NSObject, ObservableObject {
 
         // Attendre que l'audio se libère complètement
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            // Jouer le beep
+            // Jouer le beep (maintenant personnalisé)
             self?.playBeep()
 
             // Passer en mode question directement
             self?.isWaitingForQuestion = true
 
-            // Démarrer l'écoute après le beep avec plus de délai
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            // Délai adaptatif basé sur la durée du son
+            let soundDuration = self?.beepPlayer?.duration ?? 0.3
+            let adaptiveDelay = max(soundDuration + 0.2, 0.5)
+
+            // Démarrer l'écoute après le son + petit buffer
+            DispatchQueue.main.asyncAfter(deadline: .now() + adaptiveDelay) { [weak self] in
                 self?.startListening(forActivation: false)
 
                 // 🎯 TIMEOUT BEAUCOUP PLUS LONG - Juste sécurité contre les blocages
@@ -428,7 +534,7 @@ class VoiceInteractionManager: NSObject, ObservableObject {
     }
 
     func speakInteraction(_ text: String, priority: Int = 15) {
-        voiceSynthesisManager?.speakInteraction(text, priority: priority)
+        voiceSynthesisManager?.speakInteraction(text)
         print("🎤 Message d'interaction envoyé: '\(text)'")
     }
 
@@ -714,7 +820,7 @@ class VoiceInteractionManager: NSObject, ObservableObject {
     }
 
     private func playBeep() {
-        // ✅ NOUVEAU : Logique audio intelligente (même que VoiceSynthesisManager)
+        // ✅ Logique audio intelligente (même que VoiceSynthesisManager)
         let audioSession = AVAudioSession.sharedInstance()
         let hasAirPods = audioSession.currentRoute.outputs.contains {
             $0.portType == .bluetoothA2DP || $0.portType == .bluetoothHFP
@@ -723,8 +829,10 @@ class VoiceInteractionManager: NSObject, ObservableObject {
         do {
             if hasAirPods {
                 try audioSession.overrideOutputAudioPort(.none) // AirPods
+                print("🎧 Route audio beep: AirPods")
             } else {
                 try audioSession.overrideOutputAudioPort(.speaker) // Haut-parleurs
+                print("🔊 Route audio beep: Haut-parleurs")
             }
         } catch {
             print("❌ Erreur route audio beep: \(error)")
@@ -733,7 +841,19 @@ class VoiceInteractionManager: NSObject, ObservableObject {
         beepPlayer?.stop()
         beepPlayer?.currentTime = 0
         beepPlayer?.play()
-        print("🔊 Beep d'activation joué")
+        
+        // 🎵 Feedback selon le type de son
+        if let soundURL = beepPlayer?.url {
+            if soundURL.lastPathComponent.contains("custom") ||
+               soundURL.lastPathComponent.contains("ecoute") ||
+               soundURL.lastPathComponent.contains("activation") {
+                print("🎵 Son personnalisé d'activation joué: \(soundURL.lastPathComponent)")
+            } else {
+                print("🔊 Bip d'activation généré joué")
+            }
+        } else {
+            print("🎵 Son d'activation joué")
+        }
     }
 
     // Version modifiée pour gérer le timeout des résultats partiels
@@ -1281,17 +1401,32 @@ class VoiceInteractionManager: NSObject, ObservableObject {
             privacyInfo = "❌ iOS 13+ requis pour mode local"
         }
 
+        // Info sur le son d'activation
+        var soundInfo = "🎵 Son d'activation: "
+        if let soundURL = beepPlayer?.url {
+            if soundURL.lastPathComponent.contains("custom") ||
+               soundURL.lastPathComponent.contains("ecoute") ||
+               soundURL.lastPathComponent.contains("activation") {
+                soundInfo += "Personnalisé (\(soundURL.lastPathComponent))"
+            } else {
+                soundInfo += "Bip généré"
+            }
+        } else {
+            soundInfo += "Non chargé"
+        }
+
         return """
         🎤 Interaction Vocale (confiance Apple):
            - État: \(statusText)
            - Service: \(speechAvailable ? "✅ Disponible" : "❌ Indisponible")
            - \(privacyInfo)
+           - \(soundInfo)
            - Dernière activité: "\(lastRecognizedText)"
            - Objets analysés: \(currentImportantObjects.count)\(errorInfo)
 
         💡 Mode d'emploi:
            1. Appui long sur l'écran (0.8s)
-           2. Attendez le bip sonore
+           2. Attendez le son d'activation 🎵
            3. Posez votre question clairement
            4. Apple gère automatiquement la finalisation
 

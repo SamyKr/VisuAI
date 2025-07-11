@@ -12,6 +12,7 @@ struct VizAiApp: App {
     var body: some Scene {
         WindowGroup {
             MainAppView() // Utilise MainAppView au lieu de ContentView
+                .preferredColorScheme(.dark)
         }
     }
 }

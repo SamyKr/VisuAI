@@ -41,8 +41,8 @@ class ObjectDetectionManager: ObservableObject {
     @Published var modelClasses: [String] = MODEL_CLASSES
     
     // Configuration de détection améliorée
-    private let confidenceThreshold: Float = 0.6
-    private let maxDetections = 10
+    private let confidenceThreshold: Float = 0.7
+    private let maxDetections = 25
     
     // Classes à ignorer par défaut
     private var ignoredClasses = Set(["building", "vegetation", "terrain", "water"])

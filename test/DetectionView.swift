@@ -3,6 +3,7 @@
 //  test
 //
 //  Created by Samy 📍 on 04/07/2025.
+//  Modified to pass CameraManager to ParametersView - 08/07/2025
 //
 import SwiftUI
 import AVFoundation
@@ -39,7 +40,6 @@ struct DetectionView: View {
     @StateObject private var questionnaireManager = QuestionnaireManager()
     
     @State private var boundingBoxes: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))] = []
-    @State private var showingStats = false
     @State private var showingPermissionAlert = false
     @State private var showingSettings = false
     @State private var showingLiDARInfo = false
@@ -56,9 +56,6 @@ struct DetectionView: View {
     @State private var voiceEnabled = true
     @State private var voiceInteractionEnabled = true
     @State private var showingVoicePermissionAlert = false
-    
-    // État pour débug (développement seulement)
-    @State private var showDebugControls = false
     
     var body: some View {
         ZStack {
@@ -181,27 +178,11 @@ struct DetectionView: View {
                 }
             }
             
-            // HUD Compact
+            // HUD Amélioré - Colonne gauche
             VStack {
-                compactHUDView
-                
+                leftControlsColumnView
                 Spacer()
-                
-                if showingStats {
-                    PerformanceStatsView(
-                        cameraManager: cameraManager,
-                        voiceSynthesisManager: voiceSynthesisManager,
-                        voiceInteractionManager: voiceInteractionManager
-                    )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                
-                mainControlsView
-                
-                // Boutons de debug (masqués par défaut)
-                if showDebugControls {
-                    debugControlsView
-                }
+                bottomControlsView
             }
             
             // ImportantObjectsBoard overlay
@@ -213,7 +194,7 @@ struct DetectionView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
             
-            // Bouton ImportantObjectsBoard
+            // Bouton ImportantObjectsBoard (reste en haut à droite)
             VStack {
                 HStack {
                     Spacer()
@@ -221,14 +202,13 @@ struct DetectionView: View {
                         isVisible: $showingImportantObjects,
                         objectCount: importantObjects.count
                     )
-                    .padding(.top, 100)
+                    .padding(.top, 50)
                     .padding(.trailing)
                 }
                 Spacer()
             }
         }
-        .navigationTitle("Vision AI + LiDAR + Voice")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(false)
         .alert("Permission Caméra", isPresented: $showingPermissionAlert) {
             Button("Paramètres") {
                 if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
@@ -255,10 +235,258 @@ struct DetectionView: View {
             Text(getLiDARInfoMessage())
         }
         .sheet(isPresented: $showingSettings) {
-            ParametersView(isPresented: $showingSettings)
+            ParametersView(isPresented: $showingSettings, cameraManager: cameraManager)
         }
-        .animation(.easeInOut(duration: 0.3), value: showingStats)
+        .onChange(of: showingSettings) { isShowing in
+            if isShowing {
+                // Geler la détection quand on ouvre les paramètres
+                freezeDetection()
+            } else {
+                // Reprendre la détection quand on ferme les paramètres
+                unfreezeDetection()
+            }
+        }
         .animation(.easeInOut(duration: 0.3), value: showingImportantObjects)
+    }
+    
+    // MARK: - HUD Amélioré - Colonne gauche
+    
+    private var leftControlsColumnView: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 12) {
+                // FPS en haut
+                fpsIndicatorView
+                
+                // Boutons de contrôle en colonne
+                VStack(alignment: .leading, spacing: 10) {
+                    // Paramètres
+                    settingsButtonView
+                    
+                    // Microphone
+                    microphoneButtonView
+                    
+                    // Volume/Speaker
+                    speakerButtonView
+                    
+                    // Vibrations (si LiDAR actif)
+                    if cameraManager.isLiDAREnabled {
+                        vibrationButtonView
+                    }
+                    
+                    // LiDAR (si disponible)
+                    if cameraManager.lidarAvailable {
+                        lidarButtonView
+                    }
+                }
+            }
+            .padding(.leading, 16)
+            .padding(.top, 50)
+            
+            Spacer() // Force l'alignement à gauche
+        }
+    }
+    
+    // MARK: - Composants individuels
+    
+    private var fpsIndicatorView: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(cameraManager.isRunning ? Color.green : Color.red)
+                .frame(width: 8, height: 8)
+            
+            Text("\(String(format: "%.0f", cameraManager.currentFPS)) FPS")
+                .font(.system(.body, design: .monospaced))
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+                .onTapGesture {
+                    if voiceEnabled {
+                        let fps = String(format: "%.0f", cameraManager.currentFPS)
+                        let status = cameraManager.isRunning ? "en cours" : "arrêté"
+                        voiceSynthesisManager.speak("\(fps) images par seconde, statut \(status)")
+                    }
+                }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.8))
+        .cornerRadius(10)
+    }
+    
+    private var settingsButtonView: some View {
+        Button(action: {
+            showingSettings = true
+            cameraManager.playSelectionFeedback()
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "gear")
+                    .font(.title3)
+                    .foregroundColor(.white)
+                Text("Paramètres")
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.black.opacity(0.8))
+            .cornerRadius(12)
+        }
+    }
+    
+    private var microphoneButtonView: some View {
+        Button(action: {
+            voiceInteractionEnabled.toggle()
+            if voiceInteractionEnabled {
+                voiceInteractionManager.startContinuousListening()
+            } else {
+                voiceInteractionManager.stopContinuousListening()
+            }
+            cameraManager.playSelectionFeedback()
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: voiceInteractionEnabled ? "mic.fill" : "mic.slash.fill")
+                    .font(.title3)
+                    .foregroundColor(getInteractionStatusColor())
+                Text("Micro")
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(getInteractionStatusColor())
+                    .onTapGesture {
+                        if voiceEnabled {
+                            let status = voiceInteractionEnabled ? "activé" : "désactivé"
+                            voiceSynthesisManager.speak("Micro \(status)")
+                        }
+                    }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.black.opacity(0.8))
+            .cornerRadius(12)
+        }
+    }
+    
+    private var speakerButtonView: some View {
+        Button(action: {
+            voiceEnabled.toggle()
+            if !voiceEnabled {
+                voiceSynthesisManager.stopSpeaking()
+            }
+            cameraManager.playSelectionFeedback()
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.title3)
+                    .foregroundColor(voiceEnabled ? .blue : .gray)
+                Text("Volume")
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(voiceEnabled ? .blue : .gray)
+                    .onTapGesture {
+                        if voiceEnabled {
+                            let status = voiceEnabled ? "activé" : "désactivé"
+                            voiceSynthesisManager.speak("Volume \(status)")
+                        }
+                    }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.black.opacity(0.8))
+            .cornerRadius(12)
+        }
+    }
+    
+    private var vibrationButtonView: some View {
+        Button(action: {
+            proximityAlertsEnabled.toggle()
+            cameraManager.enableProximityAlerts(proximityAlertsEnabled)
+            cameraManager.playSelectionFeedback()
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: proximityAlertsEnabled ? "iphone.radiowaves.left.and.right" : "iphone.slash")
+                    .font(.title3)
+                    .foregroundColor(proximityAlertsEnabled ? .orange : .gray)
+                Text("Vibration")
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(proximityAlertsEnabled ? .orange : .gray)
+                    .onTapGesture {
+                        if voiceEnabled {
+                            let status = proximityAlertsEnabled ? "activée" : "désactivée"
+                            voiceSynthesisManager.speak("Vibration \(status)")
+                        }
+                    }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.black.opacity(0.8))
+            .cornerRadius(12)
+        }
+    }
+    
+    private var lidarButtonView: some View {
+        Button(action: {
+            let success = cameraManager.toggleLiDAR()
+            if success {
+                cameraManager.playSuccessFeedback()
+            }
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: cameraManager.isLiDAREnabled ? "location.fill" : "location")
+                    .font(.title3)
+                    .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                Text("LiDAR")
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .gray)
+                    .onTapGesture {
+                        if voiceEnabled {
+                            let status = cameraManager.isLiDAREnabled ? "activé" : "désactivé"
+                            voiceSynthesisManager.speak("LiDAR \(status)")
+                        }
+                    }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.black.opacity(0.8))
+            .cornerRadius(12)
+        }
+        .onLongPressGesture {
+            showingLiDARInfo = true
+        }
+    }
+    
+    // MARK: - Contrôles du bas (bouton pause seulement)
+    
+    private var bottomControlsView: some View {
+        HStack {
+            Spacer()
+            
+            // Bouton Start/Stop principal centré
+            Button(action: {
+                if cameraManager.isRunning {
+                    cameraManager.stopSession()
+                    voiceSynthesisManager.stopSpeaking()
+                    voiceInteractionManager.stopContinuousListening()
+                } else {
+                    if cameraManager.hasPermission {
+                        cameraManager.startSession()
+                    } else {
+                        showingPermissionAlert = true
+                    }
+                }
+            }) {
+                Image(systemName: cameraManager.isRunning ? "pause.fill" : "play.fill")
+                    .font(.title)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 16)
+                    .background(cameraManager.isRunning ? Color.red.opacity(0.8) : Color.green.opacity(0.8))
+                    .cornerRadius(16)
+            }
+            
+            Spacer()
+        }
+        .padding(.bottom, 50)
     }
     
     // MARK: - Configuration depuis le questionnaire
@@ -301,312 +529,6 @@ struct DetectionView: View {
         print("   - Alertes proximité: \(proximityAlertsEnabled ? "✅" : "❌")")
         print("   - Synthèse vocale: \(voiceEnabled ? "✅" : "❌")")
         print("   - Interaction vocale: ✅ (appui long)")
-    }
-    
-    // MARK: - HUD Ultra-Compact (UNE SEULE LIGNE)
-    
-    private var compactHUDView: some View {
-        HStack(spacing: 8) {
-            // Status compact tout en ligne
-            HStack(spacing: 8) {
-                // Status live
-                Circle()
-                    .fill(cameraManager.isRunning ? Color.green : Color.red)
-                    .frame(width: 6, height: 6)
-                
-                // FPS
-                Text("\(String(format: "%.0f", cameraManager.currentFPS))")
-                    .font(.caption2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                
-                // Objets actifs
-                let activeObjects = boundingBoxes.filter { $0.trackingInfo.opacity > 0.5 }.count
-                let memoryObjects = boundingBoxes.filter { $0.trackingInfo.opacity <= 0.5 }.count
-                
-                Text("🎯\(activeObjects)")
-                    .font(.caption2)
-                    .foregroundColor(.green)
-                
-                if memoryObjects > 0 {
-                    Text("+\(memoryObjects)")
-                        .font(.caption2)
-                        .foregroundColor(.orange)
-                }
-                
-                // VIP objects
-                if importantObjects.count > 0 {
-                    Text("🏆\(importantObjects.count)")
-                        .font(.caption2)
-                        .foregroundColor(.yellow)
-                }
-                
-                // Status services ultra-compacts
-                Circle()
-                    .fill(voiceEnabled ? .blue : .gray)
-                    .frame(width: 4, height: 4)
-                
-                Circle()
-                    .fill(getInteractionStatusColor())
-                    .frame(width: 4, height: 4)
-                
-                if cameraManager.lidarAvailable {
-                    Circle()
-                        .fill(cameraManager.isLiDAREnabled ? .blue : .gray)
-                        .frame(width: 4, height: 4)
-                    
-                    if cameraManager.isLiDAREnabled {
-                        Circle()
-                            .fill(proximityAlertsEnabled ? .orange : .gray)
-                            .frame(width: 4, height: 4)
-                    }
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.black.opacity(0.7))
-            .cornerRadius(8)
-            
-            Spacer()
-            
-            // Boutons essentiels seulement
-            essentialControlsView
-        }
-        .padding(.horizontal)
-        .padding(.top, 8)
-    }
-    
-    private var essentialControlsView: some View {
-        HStack(spacing: 6) {
-            // Indicateur d'état vocal (pas un bouton)
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(getInteractionStatusColor())
-                    .frame(width: 6, height: 6)
-                Image(systemName: voiceInteractionEnabled ? "mic.fill" : "mic.slash")
-                    .font(.caption2)
-                    .foregroundColor(getInteractionStatusColor())
-                Text(voiceInteractionEnabled ? "ON" : "OFF")
-                    .font(.caption2)
-                    .foregroundColor(getInteractionStatusColor())
-                    .fontWeight(.bold)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(Color.black.opacity(0.7))
-            .cornerRadius(6)
-            .onTapGesture {
-                // Tap pour activer/désactiver le service
-                voiceInteractionEnabled.toggle()
-                if voiceInteractionEnabled {
-                    voiceInteractionManager.startContinuousListening()
-                } else {
-                    voiceInteractionManager.stopContinuousListening()
-                }
-                cameraManager.playSelectionFeedback()
-            }
-            
-            // Speaker
-            Button(action: {
-                voiceEnabled.toggle()
-                if !voiceEnabled {
-                    voiceSynthesisManager.stopSpeaking()
-                }
-                cameraManager.playSelectionFeedback()
-            }) {
-                Image(systemName: voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    .font(.caption)
-                    .foregroundColor(voiceEnabled ? .blue : .gray)
-                    .padding(6)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(6)
-            }
-            
-            // Reset
-            Button(action: {
-                cameraManager.resetTracking()
-                voiceSynthesisManager.clearAllState()
-                voiceInteractionManager.stopContinuousListening()
-                cameraManager.playSuccessFeedback()
-                importantObjects.removeAll()
-            }) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.caption)
-                    .foregroundColor(.white)
-                    .padding(6)
-                    .background(Color.purple.opacity(0.8))
-                    .cornerRadius(6)
-            }
-            
-            // LiDAR (si disponible)
-            if cameraManager.lidarAvailable {
-                Button(action: {
-                    let success = cameraManager.toggleLiDAR()
-                    if success {
-                        cameraManager.playSuccessFeedback()
-                    }
-                }) {
-                    Image(systemName: cameraManager.isLiDAREnabled ? "location.fill" : "location")
-                        .font(.caption)
-                        .foregroundColor(cameraManager.isLiDAREnabled ? .blue : .white)
-                        .padding(6)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(6)
-                }
-                .onLongPressGesture {
-                    showingLiDARInfo = true
-                }
-            }
-            
-            // Settings
-            Button(action: {
-                showingSettings = true
-                cameraManager.playSelectionFeedback()
-            }) {
-                Image(systemName: "gear")
-                    .font(.caption)
-                    .foregroundColor(.white)
-                    .padding(6)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(6)
-            }
-        }
-    }
-    
-    private var mainControlsView: some View {
-        HStack {
-            // Bouton Stats (gauche)
-            Button(action: {
-                showingStats.toggle()
-                cameraManager.playSelectionFeedback()
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: showingStats ? "chart.bar.fill" : "chart.bar")
-                        .font(.caption)
-                    Text("Stats")
-                        .font(.caption2)
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(Color.black.opacity(0.7))
-                .cornerRadius(6)
-            }
-            
-            // Bouton debug compact
-            Button("🔧") {
-                showDebugControls.toggle()
-            }
-            .font(.caption)
-            .padding(6)
-            .background(Color.black.opacity(0.5))
-            .cornerRadius(4)
-            
-            Spacer()
-            
-            // Alertes proximité (si LiDAR actif)
-            if cameraManager.isLiDAREnabled {
-                Button(action: {
-                    proximityAlertsEnabled.toggle()
-                    cameraManager.enableProximityAlerts(proximityAlertsEnabled)
-                    cameraManager.playSelectionFeedback()
-                }) {
-                    Text(proximityAlertsEnabled ? "📳" : "🔕")
-                        .font(.caption)
-                        .padding(6)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(6)
-                }
-            }
-            
-            Spacer()
-            
-            // Start/Stop principal
-            Button(cameraManager.isRunning ? "■" : "▶") {
-                if cameraManager.isRunning {
-                    cameraManager.stopSession()
-                    voiceSynthesisManager.stopSpeaking()
-                    voiceInteractionManager.stopContinuousListening()
-                } else {
-                    if cameraManager.hasPermission {
-                        cameraManager.startSession()
-                    } else {
-                        showingPermissionAlert = true
-                    }
-                }
-            }
-            .font(.title2)
-            .foregroundColor(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(cameraManager.isRunning ? Color.red : Color.green)
-            .cornerRadius(8)
-        }
-        .padding(.horizontal)
-        .padding(.bottom, 8)
-    }
-    
-    // MARK: - Debug Controls (ultra-compact)
-    
-    private var debugControlsView: some View {
-        HStack(spacing: 6) {
-            Text("🔧")
-                .font(.caption2)
-                .foregroundColor(.orange)
-            
-            Button("Reset") {
-                cameraManager.resetPerformanceStats()
-                voiceSynthesisManager.clearAllState()
-                importantObjects.removeAll()
-            }
-            .font(.caption2)
-            .foregroundColor(.white)
-            .padding(4)
-            .background(Color.blue.opacity(0.7))
-            .cornerRadius(4)
-            
-            Button("Audio") {
-                if voiceEnabled {
-                    voiceSynthesisManager.speak("Test audio")
-                }
-            }
-            .font(.caption2)
-            .foregroundColor(.white)
-            .padding(4)
-            .background(Color.green.opacity(0.7))
-            .cornerRadius(4)
-            .disabled(!voiceEnabled)
-            
-            Button("Voice") {
-                if voiceInteractionEnabled {
-                    voiceInteractionManager.interruptForInteraction(reason: "Test")
-                    voiceInteractionManager.speakInteraction("Test d'interaction - appui long sur l'écran puis posez votre question")
-                }
-            }
-            .font(.caption2)
-            .foregroundColor(.white)
-            .padding(4)
-            .background(Color.purple.opacity(0.7))
-            .cornerRadius(4)
-            .disabled(!voiceInteractionEnabled)
-            
-            Button("Quest") {
-                print("📝 Réponses du questionnaire:")
-                for (id, response) in questionnaireManager.responses {
-                    print("   Question \(id): \(response ? "OUI" : "NON")")
-                }
-            }
-            .font(.caption2)
-            .foregroundColor(.white)
-            .padding(4)
-            .background(Color.orange.opacity(0.7))
-            .cornerRadius(4)
-        }
-        .padding(8)
-        .background(Color.black.opacity(0.8))
-        .cornerRadius(8)
-        .padding(.horizontal)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
     
     // MARK: - Detection Labels View
@@ -674,6 +596,49 @@ struct DetectionView: View {
             x: rect.midX * geometry.size.width,
             y: (1 - rect.maxY) * geometry.size.height - 10
         )
+    }
+    
+    // MARK: - Freeze/Unfreeze Detection
+    
+    private func freezeDetection() {
+        print("🧊 Gel de la détection - ouverture des paramètres")
+        
+        // Arrêter la session caméra
+        cameraManager.stopSession()
+        
+        // Arrêter tous les services audio
+        voiceSynthesisManager.stopSpeaking()
+        voiceInteractionManager.stopContinuousListening()
+        
+        // Arrêter le timer des objets importants
+        stopImportantObjectsTimer()
+        
+        // Feedback sonore si audio activé
+        if voiceEnabled {
+            voiceSynthesisManager.speak("Détection en pause")
+        }
+    }
+    
+    private func unfreezeDetection() {
+        print("🔄 Reprise de la détection - fermeture des paramètres")
+        
+        // Reprendre la session caméra si on a les permissions
+        if cameraManager.hasPermission {
+            cameraManager.startSession()
+        }
+        
+        // Reprendre l'interaction vocale si elle était activée
+        if voiceInteractionEnabled {
+            voiceInteractionManager.startContinuousListening()
+        }
+        
+        // Reprendre le timer des objets importants
+        startImportantObjectsTimer()
+        
+        // Feedback sonore si audio activé
+        if voiceEnabled {
+            voiceSynthesisManager.speak("Détection reprise")
+        }
     }
     
     // MARK: - Setup Methods
@@ -836,78 +801,6 @@ class CameraDetectionDelegate: CameraManagerDelegate {
 
 // MARK: - Vues supplémentaires
 
-struct PerformanceStatsView: View {
-    let cameraManager: CameraManager
-    let voiceSynthesisManager: VoiceSynthesisManager
-    let voiceInteractionManager: VoiceInteractionManager
-    
-    @State private var cameraStats = ""
-    @State private var voiceStats = ""
-    @State private var interactionStats = ""
-    
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Stats Caméra
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("📹 Caméra & Détection")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    Text(cameraStats)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.white)
-                }
-                .padding()
-                .background(Color.black.opacity(0.8))
-                .cornerRadius(12)
-                
-                // Stats Audio
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("🗣️ Synthèse Vocale")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    Text(voiceStats)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.white)
-                }
-                .padding()
-                .background(Color.orange.opacity(0.8))
-                .cornerRadius(12)
-                
-                // Stats Interaction
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("🎤 Interaction Vocale")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    Text(interactionStats)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.white)
-                }
-                .padding()
-                .background(Color.purple.opacity(0.8))
-                .cornerRadius(12)
-            }
-        }
-        .frame(maxHeight: 300)
-        .padding(.horizontal)
-        .onAppear {
-            updateStats()
-        }
-        .onReceive(Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()) { _ in
-            updateStats()
-        }
-    }
-    
-    private func updateStats() {
-        cameraStats = cameraManager.getPerformanceStats()
-        voiceStats = voiceSynthesisManager.getStats()
-        interactionStats = voiceInteractionManager.getStats()
-    }
-}
-
 struct VoiceListeningIndicator: View {
     let isWaitingForQuestion: Bool
     let lastRecognizedText: String
@@ -947,61 +840,6 @@ struct VoiceListeningIndicator: View {
         .cornerRadius(12)
         .onAppear {
             pulseAnimation = true
-        }
-    }
-}
-
-// MARK: - Settings View (simplifiée)
-
-struct CameraDetectionSettingsView: View {
-    @Binding var isPresented: Bool
-    let cameraManager: CameraManager
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Text("Paramètres de détection")
-                    .font(.title)
-                    .padding()
-                
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("ℹ️ Configuration automatique")
-                        .font(.headline)
-                    
-                    Text("L'application se configure automatiquement selon vos réponses au questionnaire initial. Vous pouvez modifier les paramètres manuellement dans l'interface de détection.")
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.leading)
-                    
-                    Divider()
-                    
-                    Text("🎯 Correspondance questionnaire:")
-                        .font(.headline)
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("• Question 2 (alertes obstacles) → LiDAR + vibrations")
-                        Text("• Question 3 (préférence vocale) → Synthèse vocale")
-                        Text("• Interaction vocale → Toujours disponible (appui long)")
-                    }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(12)
-                
-                Spacer()
-            }
-            .padding()
-            .navigationTitle("Paramètres")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Fermer") {
-                        isPresented = false
-                    }
-                }
-            }
         }
     }
 }
