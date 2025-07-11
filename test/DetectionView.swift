@@ -65,6 +65,9 @@ struct DetectionView: View {
                     setupManagers()
                     startImportantObjectsTimer()
                     
+                    // Désactiver la mise en veille
+                    disableSleep()
+                    
                     if cameraManager.hasPermission {
                         cameraManager.startSession()
                     } else {
@@ -81,6 +84,9 @@ struct DetectionView: View {
                     voiceSynthesisManager.stopSpeaking()
                     voiceInteractionManager.stopContinuousListening()
                     stopImportantObjectsTimer()
+                    
+                    // Réactiver la mise en veille
+                    enableSleep()
                 }
             
             // 🎤 OVERLAY TRANSPARENT POUR APPUI LONG SUR TOUT L'ÉCRAN
@@ -247,6 +253,21 @@ struct DetectionView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: showingImportantObjects)
+    }
+    
+    // MARK: - Sleep Management Methods
+    private func disableSleep() {
+        DispatchQueue.main.async {
+            UIApplication.shared.isIdleTimerDisabled = true
+            print("🔒 Mise en veille désactivée")
+        }
+    }
+    
+    private func enableSleep() {
+        DispatchQueue.main.async {
+            UIApplication.shared.isIdleTimerDisabled = false
+            print("💤 Mise en veille réactivée")
+        }
     }
     
     // MARK: - HUD Amélioré - Colonne gauche
@@ -467,9 +488,16 @@ struct DetectionView: View {
                     cameraManager.stopSession()
                     voiceSynthesisManager.stopSpeaking()
                     voiceInteractionManager.stopContinuousListening()
+                    
+                    // Réactiver la mise en veille quand on arrête
+                    enableSleep()
+                    
                 } else {
                     if cameraManager.hasPermission {
                         cameraManager.startSession()
+                        
+                        // Désactiver la mise en veille quand on démarre
+                        disableSleep()
                     } else {
                         showingPermissionAlert = true
                     }
@@ -613,6 +641,9 @@ struct DetectionView: View {
         // Arrêter le timer des objets importants
         stopImportantObjectsTimer()
         
+        // Réactiver la mise en veille pendant les paramètres
+        enableSleep()
+        
         // Feedback sonore si audio activé
         if voiceEnabled {
             voiceSynthesisManager.speak("Détection en pause")
@@ -625,6 +656,9 @@ struct DetectionView: View {
         // Reprendre la session caméra si on a les permissions
         if cameraManager.hasPermission {
             cameraManager.startSession()
+            
+            // Désactiver à nouveau la mise en veille
+            disableSleep()
         }
         
         // Reprendre l'interaction vocale si elle était activée
@@ -843,3 +877,4 @@ struct VoiceListeningIndicator: View {
         }
     }
 }
+ 
