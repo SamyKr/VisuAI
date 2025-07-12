@@ -3,17 +3,18 @@
 //  Interface de Configuration et Paramètres Avancés
 //
 //  Vue SwiftUI pour la gestion des paramètres utilisateur et de la configuration
-//  de détection d'objets. Permet la modification du profil utilisateur et la
-//  sélection des classes d'objets à détecter.
+//  des objets dangereux. Permet la modification du profil utilisateur et la
+//  sélection des objets considérés comme dangereux pour les alertes vocales.
+//
+//  🎯 MODIFIÉ: Système d'objets dangereux remplace les classes de détection
 //
 //  Fonctionnalités:
-//  - Gestion du profil utilisateur (questionnaire d'accessibilité)
-//  - Configuration des 49 classes de détection (45 activées par défaut)
-//  - NOUVEAU: Paramètre de distance critique modifiable (0.5m - 10m)
-//  - Synchronisation DIRECTE avec CameraManager (pas de double ObjectDetectionManager)
-//  - Interface de recherche et filtrage des classes
+//  - Gestion du profil utilisateur (questionnaire d'accessibilité simplifié)
+//  - Configuration des objets dangereux (12 par défaut)
+//  - Paramètre de distance critique modifiable (0.5m - 10m)
+//  - Synchronisation DIRECTE avec CameraManager
+//  - Interface de recherche et filtrage des objets
 //  - Sauvegarde persistante des préférences utilisateur
-//  - Classes ignorées par défaut: building, vegetation, terrain, water
 //
 
 import SwiftUI
@@ -42,9 +43,6 @@ class SafetyParametersManager: ObservableObject {
     init(cameraManager: CameraManager) {
         self.cameraManager = cameraManager
         loadCriticalDistance()
-        
-        print("🔄 INIT SafetyParametersManager: distance chargée = \(criticalDistance)m")
-        
     }
     
     func setCriticalDistance(_ distance: Float) {
@@ -52,8 +50,6 @@ class SafetyParametersManager: ObservableObject {
         criticalDistance = clampedDistance
         saveCriticalDistance()
         applyCriticalDistance()
-        
-        print("✅ Distance critique mise à jour: \(String(format: "%.1f", clampedDistance))m")
     }
     
     private func saveCriticalDistance() {
@@ -75,7 +71,6 @@ class SafetyParametersManager: ObservableObject {
     
     func resetToDefault() {
         setCriticalDistance(2.0)
-        print("🔄 Distance critique réinitialisée à 2.0m")
     }
     
     func getDistanceDescription() -> String {
@@ -83,120 +78,98 @@ class SafetyParametersManager: ObservableObject {
     }
 }
 
-// 🎯 MODIFICATION PRINCIPALE: DetectionClassesManager maintenant utilise le CameraManager directement
-class DetectionClassesManager: ObservableObject {
-    @Published var enabledClasses: Set<String> = []
+// 🎯 NOUVEAU: DangerousObjectsManager pour gérer les objets considérés comme dangereux
+class DangerousObjectsManager: ObservableObject {
+    @Published var dangerousObjects: Set<String> = []
     
-    // 🔗 Référence directe au CameraManager (pas de copie locale)
+    // 🔗 Référence directe au CameraManager
     private weak var cameraManager: CameraManager?
     
-    // Accès aux classes via le CameraManager
+    // Liste par défaut des objets dangereux
+    private let defaultDangerousTypes = Set([
+        "person", "cyclist", "motorcyclist",
+        "car", "truck", "bus", "motorcycle", "bicycle",
+        "pole", "traffic cone", "barrier", "temporary barrier"
+    ])
+    
+    // Accès aux classes détectées via le CameraManager
     var availableClasses: [String] {
         return cameraManager?.getAvailableClasses().sorted() ?? ObjectDetectionManager.getAllModelClasses().sorted()
     }
     
     private let userDefaults = UserDefaults.standard
-    private let enabledClassesKey = "detection_enabled_classes"
+    private let dangerousObjectsKey = "dangerous_objects_list"
     
-    // 🎯 NOUVEAU: Initialisation avec CameraManager
     init(cameraManager: CameraManager) {
         self.cameraManager = cameraManager
-        loadEnabledClasses()
+        loadDangerousObjects()
         
-        // MODIFIÉ: Activer toutes les classes SAUF celles ignorées par défaut
-        if enabledClasses.isEmpty {
-            let allClasses = Set(ObjectDetectionManager.getAllModelClasses())
-            let defaultIgnoredClasses = Set(["building", "vegetation", "terrain", "water"])
-            enabledClasses = allClasses.subtracting(defaultIgnoredClasses)
-            saveEnabledClasses()
-            print("✅ Classes par défaut: \(enabledClasses.count)/\(allClasses.count) activées")
+        // Si aucune configuration sauvegardée, utiliser les valeurs par défaut
+        if dangerousObjects.isEmpty {
+            dangerousObjects = defaultDangerousTypes
+            saveDangerousObjects()
         }
         
-        // 🔗 Synchronisation immédiate avec le CameraManager
-        synchronizeWithCameraManager()
+        synchronizeWithVoiceManager()
     }
     
-    // 🔗 Synchronisation directe avec CameraManager
-    private func synchronizeWithCameraManager() {
-        guard let cameraManager = cameraManager else { return }
+    // 🔗 Synchronisation avec le système de synthèse vocale
+    private func synchronizeWithVoiceManager() {
+        // Cette méthode sera appelée pour synchroniser avec le VoiceSynthesisManager
+        // via le CameraManager
+        cameraManager?.updateDangerousObjects(dangerousObjects)
         
-        // Synchroniser l'état initial :
-        // - Classes désactivées → ajoutées aux ignoredClasses
-        // - Classes activées → retirées des ignoredClasses
-        let allClasses = Set(availableClasses)
-        let disabledClasses = allClasses.subtracting(enabledClasses)
-        
-        // Nettoyer d'abord les classes ignorées
-        cameraManager.clearIgnoredClasses()
-        
-        // Ajouter toutes les classes désactivées aux classes ignorées
-        for className in disabledClasses {
-            cameraManager.addIgnoredClass(className)
-        }
-        
-        print("✅ Synchronisation DIRECTE avec CameraManager: \(enabledClasses.count) classes activées, \(disabledClasses.count) classes ignorées")
+        // 🐛 DEBUG: Vérifier la synchronisation
+        print("🔧 DEBUG Synchronisation:")
+        print("   - Objets dangereux actuels: \(Array(dangerousObjects).sorted())")
+        print("   - CameraManager connecté: \(cameraManager != nil)")
     }
     
-    func toggleClass(_ className: String) {
-        guard let cameraManager = cameraManager else { return }
-        
-        if enabledClasses.contains(className) {
-            // Désactiver la classe → l'ajouter aux classes ignorées du CameraManager
-            enabledClasses.remove(className)
-            cameraManager.addIgnoredClass(className)
+    func toggleDangerousObject(_ objectType: String) {
+        if dangerousObjects.contains(objectType) {
+            dangerousObjects.remove(objectType)
         } else {
-            // Activer la classe → la retirer des classes ignorées du CameraManager
-            enabledClasses.insert(className)
-            cameraManager.removeIgnoredClass(className)
+            dangerousObjects.insert(objectType)
         }
-        saveEnabledClasses()
-        
-        print("✅ Classe '\(className)' \(enabledClasses.contains(className) ? "activée" : "désactivée") - EFFET IMMÉDIAT sur détection")
+        saveDangerousObjects()
+        synchronizeWithVoiceManager()
     }
     
-    func isClassEnabled(_ className: String) -> Bool {
-        return enabledClasses.contains(className)
+    func isDangerous(_ objectType: String) -> Bool {
+        return dangerousObjects.contains(objectType.lowercased())
     }
     
-    private func saveEnabledClasses() {
-        let classArray = Array(enabledClasses)
-        userDefaults.set(classArray, forKey: enabledClassesKey)
+    private func saveDangerousObjects() {
+        let objectsArray = Array(dangerousObjects)
+        userDefaults.set(objectsArray, forKey: dangerousObjectsKey)
     }
     
-    private func loadEnabledClasses() {
-        if let savedClasses = userDefaults.array(forKey: enabledClassesKey) as? [String] {
-            enabledClasses = Set(savedClasses)
+    private func loadDangerousObjects() {
+        if let savedObjects = userDefaults.array(forKey: dangerousObjectsKey) as? [String] {
+            dangerousObjects = Set(savedObjects)
         }
     }
     
     func resetToDefaults() {
-        guard let cameraManager = cameraManager else { return }
-        
-        // MODIFIÉ: Réinitialiser en activant toutes les classes SAUF celles ignorées par défaut
-        let allClasses = Set(availableClasses)
-        let defaultIgnoredClasses = Set(["building", "vegetation", "terrain", "water"])
-        enabledClasses = allClasses.subtracting(defaultIgnoredClasses)
-        saveEnabledClasses()
-        
-        // Synchroniser IMMÉDIATEMENT avec CameraManager
-        cameraManager.clearIgnoredClasses()
-        
-        // Ajouter seulement les classes par défaut ignorées
-        for className in defaultIgnoredClasses {
-            cameraManager.addIgnoredClass(className)
-        }
-        
-        print("✅ Réinitialisation: \(enabledClasses.count)/\(allClasses.count) classes activées par défaut - EFFET IMMÉDIAT")
+        dangerousObjects = defaultDangerousTypes
+        saveDangerousObjects()
+        synchronizeWithVoiceManager()
     }
     
-    // 🔗 Vérifier si le modèle est chargé via CameraManager
     func isModelLoaded() -> Bool {
         return cameraManager?.getAvailableClasses().count ?? 0 > 0
     }
     
-    // 🎯 Obtenir les classes actuellement ignorées depuis CameraManager
-    func getIgnoredClassesFromCameraManager() -> [String] {
-        return cameraManager?.getIgnoredClasses() ?? []
+    // Obtenir les objets dangereux actuels
+    func getDangerousObjectsList() -> [String] {
+        return Array(dangerousObjects).sorted()
+    }
+    
+    // Obtenir les objets non-dangereux disponibles
+    func getNonDangerousObjects() -> [String] {
+        let allClasses = Set(availableClasses.map { $0.lowercased() })
+        let nonDangerous = allClasses.subtracting(dangerousObjects)
+        return Array(nonDangerous).sorted()
     }
 }
 
@@ -208,8 +181,8 @@ struct ParametersView: View {
     
     @StateObject private var questionnaireManager = QuestionnaireManager()
     
-    // 🔗 MODIFICATION: DetectionClassesManager utilise maintenant le CameraManager passé
-    @StateObject private var detectionClassesManager: DetectionClassesManager
+    // 🔗 MODIFICATION: DangerousObjectsManager au lieu de DetectionClassesManager
+    @StateObject private var dangerousObjectsManager: DangerousObjectsManager
     
     // 🎯 NOUVEAU: Gestionnaire des paramètres de sécurité
     @StateObject private var safetyParametersManager: SafetyParametersManager
@@ -217,32 +190,22 @@ struct ParametersView: View {
     @State private var showingDeleteConfirmation = false
     @State private var showingExitConfirmation = false
     
-    // Questions du questionnaire pour modification
+    // 🎯 MODIFIÉ: Questions du questionnaire pour modification - SIMPLIFIÉ À 3 QUESTIONS
     private let questions = [
         QuestionItem(
             id: 1,
-            text: "Applications de navigation",
-            description: "Utilisez-vous régulièrement des applications de navigation ?"
+            text: "Alertes vocales d'objets proches",
+            description: "Voulez-vous être averti vocalement des objets proches ?"
         ),
         QuestionItem(
             id: 2,
-            text: "Alertes d'obstacles",
-            description: "Souhaitez-vous être averti des obstacles à distance ?"
+            text: "Vibrations de proximité",
+            description: "Voulez-vous des vibrations pour les alertes de proximité ?"
         ),
         QuestionItem(
             id: 3,
-            text: "Préférence vocale",
-            description: "Préférez-vous les alertes vocales aux vibrations ?"
-        ),
-        QuestionItem(
-            id: 4,
-            text: "Transports en commun",
-            description: "Utilisez-vous fréquemment les transports en commun ?"
-        ),
-        QuestionItem(
-            id: 5,
-            text: "Descriptions détaillées",
-            description: "Souhaitez-vous des descriptions détaillées de l'environnement ?"
+            text: "Communication vocale",
+            description: "Voulez-vous pouvoir communiquer vocalement avec l'application ?"
         )
     ]
     
@@ -251,8 +214,8 @@ struct ParametersView: View {
         self._isPresented = isPresented
         self.cameraManager = cameraManager
         
-        // Initialiser DetectionClassesManager avec le CameraManager
-        self._detectionClassesManager = StateObject(wrappedValue: DetectionClassesManager(cameraManager: cameraManager))
+        // Initialiser DangerousObjectsManager avec le CameraManager
+        self._dangerousObjectsManager = StateObject(wrappedValue: DangerousObjectsManager(cameraManager: cameraManager))
         
         // Initialiser SafetyParametersManager avec le CameraManager
         self._safetyParametersManager = StateObject(wrappedValue: SafetyParametersManager(cameraManager: cameraManager))
@@ -289,9 +252,9 @@ struct ParametersView: View {
                             safetyParametersManager: safetyParametersManager
                         )
                         
-                        // Section Paramètres Avancés
-                        AdvancedSectionView(
-                            detectionClassesManager: detectionClassesManager,
+                        // Section Configuration Objets Dangereux
+                        DangerousSectionView(
+                            dangerousObjectsManager: dangerousObjectsManager,
                             cameraManager: cameraManager
                         )
                     }
@@ -329,8 +292,8 @@ struct ParametersView: View {
     
     private func deleteProfile() {
         questionnaireManager.clearResponses()
-        detectionClassesManager.resetToDefaults()
-        safetyParametersManager.resetToDefault()  // 🎯 NOUVEAU: Reset paramètres de sécurité
+        dangerousObjectsManager.resetToDefaults()
+        safetyParametersManager.resetToDefault()
         
         // Fermer l'application après suppression
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -511,6 +474,283 @@ struct SafetySectionView: View {
     }
 }
 
+// MARK: - 🎯 NOUVELLE SECTION: Configuration Objets Dangereux
+
+struct DangerousSectionView: View {
+    @ObservedObject var dangerousObjectsManager: DangerousObjectsManager
+    let cameraManager: CameraManager
+    @State private var searchText = ""
+    @State private var showingAllObjects = false
+    
+    var filteredDangerousObjects: [String] {
+        let dangerous = dangerousObjectsManager.getDangerousObjectsList()
+        if searchText.isEmpty {
+            return dangerous
+        } else {
+            return dangerous.filter { $0.localizedCaseInsensitiveContains(searchText) }
+        }
+    }
+    
+    var filteredNonDangerousObjects: [String] {
+        let nonDangerous = dangerousObjectsManager.getNonDangerousObjects()
+        if searchText.isEmpty {
+            return nonDangerous
+        } else {
+            return nonDangerous.filter { $0.localizedCaseInsensitiveContains(searchText) }
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // En-tête de section
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.title2)
+                        .foregroundColor(.red)
+                    
+                    Text("Objets Dangereux")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(Color(hex: "f0fff0"))
+                    
+                    Spacer()
+                }
+                
+                Text("Configurez quels objets déclenchent des alertes vocales")
+                    .font(.caption)
+                    .foregroundColor(.red.opacity(0.8))
+                
+                // Statut du modèle
+                HStack {
+                    Circle()
+                        .fill(dangerousObjectsManager.isModelLoaded() ? Color(hex: "5ee852") : .orange)
+                        .frame(width: 8, height: 8)
+                    
+                    Text(dangerousObjectsManager.isModelLoaded() ?
+                         "Modèle chargé (\(dangerousObjectsManager.availableClasses.count) types d'objets)" :
+                         "Chargement du modèle...")
+                        .font(.caption)
+                        .foregroundColor(Color(hex: "f0fff0").opacity(0.8))
+                }
+            }
+            
+            // Statistiques
+            HStack {
+                Text("\(dangerousObjectsManager.dangerousObjects.count) objets considérés comme dangereux")
+                    .font(.subheadline)
+                    .foregroundColor(.red)
+                
+                Spacer()
+                
+                Button("Réinitialiser") {
+                    dangerousObjectsManager.resetToDefaults()
+                    // Feedback haptique
+                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                    impactFeedback.impactOccurred()
+                }
+                .font(.caption)
+                .foregroundColor(.red)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(.red.opacity(0.2))
+                .cornerRadius(8)
+            }
+            
+            // Barre de recherche
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(Color(hex: "f0fff0").opacity(0.6))
+                
+                TextField("Rechercher un type d'objet...", text: $searchText)
+                    .foregroundColor(Color(hex: "f0fff0"))
+                    .textFieldStyle(PlainTextFieldStyle())
+                
+                if !searchText.isEmpty {
+                    Button(action: { searchText = "" }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(Color(hex: "f0fff0").opacity(0.6))
+                    }
+                }
+            }
+            .padding()
+            .background(Color(hex: "0a1f0a").opacity(0.5))
+            .cornerRadius(10)
+            
+            // Toggle pour afficher tous les objets ou seulement les dangereux
+            Toggle("Afficher tous les objets détectables", isOn: $showingAllObjects)
+                .foregroundColor(Color(hex: "f0fff0"))
+                .toggleStyle(SwitchToggleStyle(tint: Color(hex: "5ee852")))
+            
+            // Liste des objets dangereux
+            VStack(alignment: .leading, spacing: 8) {
+                Text("🚨 Objets Dangereux (déclenchent des alertes)")
+                    .font(.headline)
+                    .foregroundColor(.red)
+                
+                if filteredDangerousObjects.isEmpty {
+                    Text("Aucun objet dangereux trouvé avec '\(searchText)'")
+                        .font(.caption)
+                        .foregroundColor(Color(hex: "f0fff0").opacity(0.6))
+                        .padding()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 6) {
+                            ForEach(filteredDangerousObjects, id: \.self) { objectType in
+                                DangerousObjectRow(
+                                    objectType: objectType,
+                                    isDangerous: true,
+                                    onToggle: {
+                                        dangerousObjectsManager.toggleDangerousObject(objectType)
+                                        cameraManager.playSelectionFeedback()
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .frame(maxHeight: showingAllObjects ? 200 : 300)
+                }
+            }
+            
+            // Liste des objets non-dangereux (si toggle activé)
+            if showingAllObjects {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("✅ Objets Non-Dangereux (détectés mais sans alerte)")
+                        .font(.headline)
+                        .foregroundColor(Color(hex: "5ee852"))
+                    
+                    if filteredNonDangerousObjects.isEmpty {
+                        Text("Tous les objets sont considérés comme dangereux")
+                            .font(.caption)
+                            .foregroundColor(Color(hex: "f0fff0").opacity(0.6))
+                            .padding()
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 6) {
+                                ForEach(filteredNonDangerousObjects, id: \.self) { objectType in
+                                    DangerousObjectRow(
+                                        objectType: objectType,
+                                        isDangerous: false,
+                                        onToggle: {
+                                            dangerousObjectsManager.toggleDangerousObject(objectType)
+                                            cameraManager.playSelectionFeedback()
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 200)
+                    }
+                }
+            }
+            
+            // Info explicative
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "info.circle.fill")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    
+                    Text("Principe de fonctionnement :")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(Color(hex: "f0fff0"))
+                }
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("• Objets dangereux = alertes vocales si distance critique atteinte")
+                    Text("• Objets non-dangereux = détectés mais aucune alerte")
+                    Text("• Tous les objets restent visibles à l'écran")
+                }
+                .font(.caption2)
+                .foregroundColor(Color(hex: "f0fff0").opacity(0.7))
+            }
+            .padding()
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(8)
+        }
+        .padding()
+        .background(.red.opacity(0.05))
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(.red.opacity(0.3), lineWidth: 1)
+        )
+    }
+}
+
+struct DangerousObjectRow: View {
+    let objectType: String
+    let isDangerous: Bool
+    let onToggle: () -> Void
+    
+    var body: some View {
+        HStack {
+            // Icône représentative
+            Image(systemName: getIconForObject(objectType))
+                .font(.title3)
+                .foregroundColor(isDangerous ? .red : Color(hex: "5ee852"))
+                .frame(width: 24, height: 24)
+            
+            // Nom de l'objet
+            Text(objectType.replacingOccurrences(of: "_", with: " ").capitalized)
+                .font(.subheadline)
+                .foregroundColor(Color(hex: "f0fff0"))
+            
+            Spacer()
+            
+            // État textuel
+            Text(isDangerous ? "DANGEREUX" : "SANS RISQUE")
+                .font(.caption2)
+                .fontWeight(.bold)
+                .foregroundColor(isDangerous ? .red : Color(hex: "5ee852"))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background((isDangerous ? Color.red : Color(hex: "5ee852")).opacity(0.2))
+                .cornerRadius(6)
+            
+            // Toggle
+            Toggle("", isOn: Binding(
+                get: { isDangerous },
+                set: { _ in onToggle() }
+            ))
+            .toggleStyle(SwitchToggleStyle(tint: .red))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(isDangerous ? Color.red.opacity(0.1) : Color(hex: "5ee852").opacity(0.05))
+        .cornerRadius(10)
+    }
+    
+    private func getIconForObject(_ objectType: String) -> String {
+        switch objectType.lowercased() {
+        case "person": return "person.fill"
+        case "cyclist": return "figure.outdoor.cycle"
+        case "motorcyclist": return "figure.motorcycling"
+        case "car", "truck", "bus": return "car.fill"
+        case "bicycle": return "bicycle"
+        case "motorcycle": return "bicycle"
+        case "traffic light", "traffic_light": return "lightbulb.fill"
+        case "traffic sign", "traffic_sign": return "stop.fill"
+        case "traffic cone": return "cone.fill"
+        case "pole": return "cylinder.fill"
+        case "barrier", "temporary barrier", "temporary_barrier": return "rectangle.fill"
+        case "chair", "couch": return "chair.fill"
+        case "bottle", "cup": return "cup.and.saucer.fill"
+        case "book": return "book.fill"
+        case "cell phone", "laptop": return "iphone"
+        case "dog", "cat", "animals": return "pawprint.fill"
+        case "building": return "building.2.fill"
+        case "vegetation": return "leaf.fill"
+        case "water": return "drop.fill"
+        case "terrain", "ground": return "mountain.2.fill"
+        case "road", "sidewalk": return "road.lanes"
+        case "wall", "fence": return "rectangle.fill"
+        default: return "questionmark.circle.fill"
+        }
+    }
+}
+
 // MARK: - Section Profil Utilisateur
 
 struct ProfileSectionView: View {
@@ -541,15 +781,51 @@ struct ProfileSectionView: View {
                     .foregroundColor(Color(hex: "f0fff0").opacity(0.7))
             }
             
-            // Statut du profil
-            HStack {
-                Circle()
-                    .fill(questionnaireManager.responses.count == 5 ? Color(hex: "5ee852") : .orange)
-                    .frame(width: 10, height: 10)
-                
-                Text("Profil \(questionnaireManager.responses.count == 5 ? "complet" : "incomplet") (\(questionnaireManager.responses.count)/5)")
-                    .font(.subheadline)
-                    .foregroundColor(Color(hex: "f0fff0"))
+            // 🎯 NOUVEAU: Résumé visuel des configurations actuelles
+            if questionnaireManager.responses.count > 0 {
+                VStack(spacing: 8) {
+                    Text("Configuration actuelle :")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(Color(hex: "f0fff0"))
+                    
+                    HStack(spacing: 16) {
+                        // Alertes vocales
+                        HStack(spacing: 6) {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.caption)
+                                .foregroundColor(questionnaireManager.responses[1] == true ? Color(hex: "5ee852") : .red)
+                            Text("Vocal")
+                                .font(.caption2)
+                                .foregroundColor(Color(hex: "f0fff0").opacity(0.8))
+                        }
+                        
+                        // Vibrations
+                        HStack(spacing: 6) {
+                            Image(systemName: "iphone.radiowaves.left.and.right")
+                                .font(.caption)
+                                .foregroundColor(questionnaireManager.responses[2] == true ? .orange : .red)
+                            Text("Vibrations")
+                                .font(.caption2)
+                                .foregroundColor(Color(hex: "f0fff0").opacity(0.8))
+                        }
+                        
+                        // Communication
+                        HStack(spacing: 6) {
+                            Image(systemName: "mic.fill")
+                                .font(.caption)
+                                .foregroundColor(questionnaireManager.responses[3] == true ? .blue : .red)
+                            Text("Micro")
+                                .font(.caption2)
+                                .foregroundColor(Color(hex: "f0fff0").opacity(0.8))
+                        }
+                        
+                        Spacer()
+                    }
+                }
+                .padding()
+                .background(Color(hex: "0a1f0a").opacity(0.4))
+                .cornerRadius(8)
             }
             
             // Liste des questions modifiables
@@ -605,159 +881,6 @@ struct ProfileSectionView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 16)
                 .stroke(Color(hex: "5ee852").opacity(0.3), lineWidth: 1)
-        )
-    }
-}
-
-// MARK: - Section Paramètres Avancés
-
-struct AdvancedSectionView: View {
-    @ObservedObject var detectionClassesManager: DetectionClassesManager
-    let cameraManager: CameraManager
-    @State private var searchText = ""
-    
-    var filteredClasses: [String] {
-        if searchText.isEmpty {
-            return detectionClassesManager.availableClasses.sorted()
-        } else {
-            return detectionClassesManager.availableClasses
-                .filter { $0.localizedCaseInsensitiveContains(searchText) }
-                .sorted()
-        }
-    }
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // En-tête de section
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "gear.circle.fill")
-                        .font(.title2)
-                        .foregroundColor(Color(hex: "56c228"))
-                    
-                    Text("Paramètres Avancés")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(Color(hex: "f0fff0"))
-                    
-                    Spacer()
-                }
-                
-                Text("Choisissez les objets à détecter - EFFET IMMÉDIAT")
-                    .font(.caption)
-                    .foregroundColor(Color(hex: "5ee852"))
-                
-                // AJOUTÉ: Statut du modèle
-                HStack {
-                    Circle()
-                        .fill(detectionClassesManager.isModelLoaded() ? Color(hex: "5ee852") : .orange)
-                        .frame(width: 8, height: 8)
-                    
-                    Text(detectionClassesManager.isModelLoaded() ?
-                         "Modèle chargé (\(detectionClassesManager.availableClasses.count) classes)" :
-                         "Chargement du modèle...")
-                        .font(.caption)
-                        .foregroundColor(Color(hex: "f0fff0").opacity(0.8))
-                }
-            }
-            
-            // Statistiques
-            HStack {
-                Text("\(detectionClassesManager.enabledClasses.count) classes activées")
-                    .font(.subheadline)
-                    .foregroundColor(Color(hex: "5ee852"))
-                
-                Spacer()
-                
-                Button("Réinitialiser") {
-                    detectionClassesManager.resetToDefaults()
-                }
-                .font(.caption)
-                .foregroundColor(Color(hex: "56c228"))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color(hex: "56c228").opacity(0.2))
-                .cornerRadius(8)
-            }
-            
-            // 🔗 AJOUTÉ: Synchronisation en temps réel
-            HStack {
-                Text("🔗 Lié au CameraManager")
-                    .font(.caption2)
-                    .foregroundColor(Color(hex: "5ee852"))
-                
-                Spacer()
-                
-                let ignoredCount = detectionClassesManager.getIgnoredClassesFromCameraManager().count
-                Text("Ignorées: \(ignoredCount)")
-                    .font(.caption2)
-                    .foregroundColor(.red.opacity(0.8))
-            }
-            
-            // Barre de recherche
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(Color(hex: "f0fff0").opacity(0.6))
-                
-                TextField("Rechercher une classe...", text: $searchText)
-                    .foregroundColor(Color(hex: "f0fff0"))
-                    .textFieldStyle(PlainTextFieldStyle())
-                
-                if !searchText.isEmpty {
-                    Button(action: { searchText = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(Color(hex: "f0fff0").opacity(0.6))
-                    }
-                }
-            }
-            .padding()
-            .background(Color(hex: "0a1f0a").opacity(0.5))
-            .cornerRadius(10)
-            
-            // Liste des classes avec scroll
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(filteredClasses, id: \.self) { className in
-                        ClassToggleRow(
-                            className: className,
-                            isEnabled: detectionClassesManager.isClassEnabled(className),
-                            onToggle: {
-                                detectionClassesManager.toggleClass(className)
-                                // 🎯 AJOUTÉ: Feedback haptique pour confirmer le changement
-                                cameraManager.playSelectionFeedback()
-                            }
-                        )
-                    }
-                }
-            }
-            .frame(maxHeight: 300)
-            
-            // 🎯 AJOUTÉ: Debug info (optionnel)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("🔧 Debug:")
-                    .font(.caption2)
-                    .foregroundColor(.orange)
-                
-                let ignoredClasses = detectionClassesManager.getIgnoredClassesFromCameraManager()
-                if !ignoredClasses.isEmpty {
-                    Text("Classes ignorées actuelles: \(ignoredClasses.joined(separator: ", "))")
-                        .font(.caption2)
-                        .foregroundColor(.red.opacity(0.7))
-                        .lineLimit(3)
-                } else {
-                    Text("Toutes les classes sont activées")
-                        .font(.caption2)
-                        .foregroundColor(Color(hex: "5ee852").opacity(0.7))
-                }
-            }
-            .padding(.top, 8)
-        }
-        .padding()
-        .background(Color(hex: "0a1f0a").opacity(0.3))
-        .cornerRadius(16)
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color(hex: "56c228").opacity(0.3), lineWidth: 1)
         )
     }
 }
@@ -838,73 +961,6 @@ struct QuestionRowView: View {
     }
 }
 
-struct ClassToggleRow: View {
-    let className: String
-    let isEnabled: Bool
-    let onToggle: () -> Void
-    
-    var body: some View {
-        HStack {
-            // Icône représentative (simplifiée)
-            Image(systemName: getIconForClass(className))
-                .font(.title3)
-                .foregroundColor(isEnabled ? Color(hex: "5ee852") : Color(hex: "f0fff0").opacity(0.5))
-                .frame(width: 24, height: 24)
-            
-            // Nom de la classe
-            Text(className.replacingOccurrences(of: "_", with: " ").capitalized)
-                .font(.subheadline)
-                .foregroundColor(Color(hex: "f0fff0"))
-            
-            Spacer()
-            
-            // État textuel
-            Text(isEnabled ? "ACTIVÉE" : "IGNORÉE")
-                .font(.caption2)
-                .fontWeight(.bold)
-                .foregroundColor(isEnabled ? Color(hex: "5ee852") : .red)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background((isEnabled ? Color(hex: "5ee852") : Color.red).opacity(0.2))
-                .cornerRadius(6)
-            
-            // Toggle
-            Toggle("", isOn: Binding(
-                get: { isEnabled },
-                set: { _ in onToggle() }
-            ))
-            .toggleStyle(SwitchToggleStyle(tint: Color(hex: "5ee852")))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(isEnabled ? Color(hex: "5ee852").opacity(0.1) : Color.red.opacity(0.05))
-        .cornerRadius(10)
-    }
-    
-    private func getIconForClass(_ className: String) -> String {
-        switch className.lowercased() {
-        case "person": return "person.fill"
-        case "car", "truck", "bus": return "car.fill"
-        case "bicycle": return "bicycle"
-        case "motorcycle": return "bicycle"
-        case "traffic light", "traffic_light": return "lightbulb.fill"
-        case "stop sign", "traffic sign", "traffic_sign": return "stop.fill"
-        case "chair", "couch": return "chair.fill"
-        case "bottle", "cup": return "cup.and.saucer.fill"
-        case "book": return "book.fill"
-        case "cell phone", "laptop": return "iphone"
-        case "dog", "cat", "animals": return "pawprint.fill"
-        case "building": return "building.2.fill"
-        case "vegetation": return "leaf.fill"
-        case "water": return "drop.fill"
-        case "terrain", "ground": return "mountain.2.fill"
-        case "road", "sidewalk": return "road.lanes"
-        case "wall", "fence": return "rectangle.fill"
-        case "pole": return "cylinder.fill"
-        default: return "cube.fill"
-        }
-    }
-}
 
 // MARK: - Preview
 
@@ -914,4 +970,3 @@ struct ParametersView_Previews: PreviewProvider {
         ParametersView(isPresented: .constant(true), cameraManager: CameraManager())
     }
 }
-

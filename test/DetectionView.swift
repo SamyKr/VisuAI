@@ -517,48 +517,139 @@ struct DetectionView: View {
         .padding(.bottom, 50)
     }
     
-    // MARK: - Configuration depuis le questionnaire
+    // MARK: - Configuration depuis le questionnaire - NOUVELLE VERSION
+    
     private func setupFromQuestionnaire() {
         let responses = questionnaireManager.responses
         
-        // Question 1: Navigation apps → Pas utilisée pour l'instant
+        print("🎯 Configuration depuis le questionnaire simplifié (3 questions):")
         
-        // Question 2: Alertes d'obstacles à distance → Active LiDAR + alertes proximité
-        if let wantsObstacleAlerts = responses[2], wantsObstacleAlerts {
-            if cameraManager.lidarAvailable {
-                let _ = cameraManager.enableLiDAR()
-                proximityAlertsEnabled = true
-                cameraManager.enableProximityAlerts(true)
-                print("✅ LiDAR et alertes proximité activés (réponse question 2)")
+        // 🎯 QUESTION 1: Alertes vocales d'objets proches
+        if let wantsVoiceAlerts = responses[1] {
+            voiceEnabled = wantsVoiceAlerts
+            if wantsVoiceAlerts {
+                print("✅ Q1: Alertes vocales ACTIVÉES")
+            } else {
+                print("❌ Q1: Alertes vocales DÉSACTIVÉES")
             }
         } else {
+            // Par défaut: alertes vocales activées
+            voiceEnabled = true
+            print("🔄 Q1: Alertes vocales par défaut (ACTIVÉES)")
+        }
+        
+        // 🎯 QUESTION 2: Vibrations pour proximité
+        if let wantsVibrations = responses[2] {
+            proximityAlertsEnabled = wantsVibrations
+            cameraManager.enableProximityAlerts(wantsVibrations)
+            
+            // Si vibrations demandées ET LiDAR disponible → activer LiDAR automatiquement
+            if wantsVibrations && cameraManager.lidarAvailable {
+                let success = cameraManager.enableLiDAR()
+                if success {
+                    print("✅ Q2: Vibrations ACTIVÉES + LiDAR ACTIVÉ automatiquement")
+                } else {
+                    print("⚠️ Q2: Vibrations ACTIVÉES mais échec activation LiDAR")
+                }
+            } else if wantsVibrations {
+                print("✅ Q2: Vibrations ACTIVÉES (LiDAR non disponible)")
+            } else {
+                print("❌ Q2: Vibrations DÉSACTIVÉES")
+            }
+        } else {
+            // Par défaut: vibrations désactivées
             proximityAlertsEnabled = false
             cameraManager.enableProximityAlerts(false)
-            print("❌ Alertes proximité désactivées (réponse question 2)")
+            print("🔄 Q2: Vibrations par défaut (DÉSACTIVÉES)")
         }
         
-        // Question 3: Préférence vocale vs vibrations → Active/désactive synthèse vocale
-        if let prefersVoice = responses[3] {
-            voiceEnabled = prefersVoice
-            if prefersVoice {
-                print("✅ Synthèse vocale activée (réponse question 3)")
+        // 🎯 QUESTION 3: Communication vocale
+        if let wantsCommunication = responses[3] {
+            voiceInteractionEnabled = wantsCommunication
+            if wantsCommunication {
+                // Démarrer l'écoute continue si activée
+                voiceInteractionManager.startContinuousListening()
+                print("✅ Q3: Communication vocale ACTIVÉE")
             } else {
-                print("❌ Synthèse vocale désactivée (réponse question 3)")
+                // Arrêter l'écoute si désactivée
+                voiceInteractionManager.stopContinuousListening()
+                print("❌ Q3: Communication vocale DÉSACTIVÉE")
+            }
+        } else {
+            // Par défaut: communication vocale activée
+            voiceInteractionEnabled = true
+            voiceInteractionManager.startContinuousListening()
+            print("🔄 Q3: Communication vocale par défaut (ACTIVÉE)")
+        }
+        
+        // 🎯 RÉCAPITULATIF FINAL
+        print("🎯 Configuration finale appliquée:")
+        print("   - 🔊 Alertes vocales: \(voiceEnabled ? "✅ ACTIVÉES" : "❌ DÉSACTIVÉES")")
+        print("   - 📳 Vibrations: \(proximityAlertsEnabled ? "✅ ACTIVÉES" : "❌ DÉSACTIVÉES")")
+        print("   - 🎤 Communication vocale: \(voiceInteractionEnabled ? "✅ ACTIVÉE" : "❌ DÉSACTIVÉE")")
+        print("   - 📍 LiDAR: \(cameraManager.isLiDAREnabled ? "✅ ACTIVÉ" : "❌ DÉSACTIVÉ")")
+        
+        // ✅ NOUVEAU: Connecter le VoiceSynthesisManager au CameraManager (CRITIQUE!)
+        cameraManager.setVoiceSynthesisManager(voiceSynthesisManager)
+        print("🔗 VoiceSynthesisManager connecté au CameraManager")
+        
+        // ✅ NOUVEAU: Synchroniser les objets dangereux depuis UserDefaults
+        let userDefaults = UserDefaults.standard
+        if let savedObjects = userDefaults.array(forKey: "dangerous_objects_list") as? [String] {
+            let dangerousSet = Set(savedObjects)
+            cameraManager.updateDangerousObjects(dangerousSet)
+            print("🔄 Objets dangereux synchronisés: \(savedObjects.count) objets")
+            print("   - Liste: \(savedObjects.sorted())")
+        } else {
+            // Utiliser les valeurs par défaut si rien n'est sauvegardé
+            let defaultDangerous: Set<String> = [
+                "person", "cyclist", "motorcyclist",
+                "car", "truck", "bus", "motorcycle", "bicycle",
+                "pole", "traffic cone", "barrier", "temporary barrier"
+            ]
+            cameraManager.updateDangerousObjects(defaultDangerous)
+            print("🔄 Objets dangereux par défaut appliqués: \(defaultDangerous.count) objets")
+        }
+        
+        // 🎯 FEEDBACK VOCAL INITIAL (si activé)
+        if voiceEnabled {
+            let statusMessage = buildConfigurationMessage()
+            // Délai pour éviter la collision avec d'autres messages au démarrage
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                voiceSynthesisManager.speak(statusMessage)
             }
         }
-        
-        // Questions 4 et 5: Peuvent être utilisées pour d'autres configurations futures
-        
-        // L'interaction vocale reste toujours activée (question à la demande)
-        voiceInteractionEnabled = true
-        
-        print("🎯 Configuration appliquée depuis le questionnaire:")
-        print("   - LiDAR: \(cameraManager.isLiDAREnabled ? "✅" : "❌")")
-        print("   - Alertes proximité: \(proximityAlertsEnabled ? "✅" : "❌")")
-        print("   - Synthèse vocale: \(voiceEnabled ? "✅" : "❌")")
-        print("   - Interaction vocale: ✅ (appui long)")
     }
-    
+
+    // 🎯 NOUVELLE MÉTHODE: Construire le message de configuration
+    private func buildConfigurationMessage() -> String {
+        var components: [String] = []
+        
+        if voiceEnabled {
+            components.append("alertes vocales activées")
+        }
+        
+        if proximityAlertsEnabled {
+            components.append("vibrations activées")
+        }
+        
+        if voiceInteractionEnabled {
+            components.append("communication vocale activée")
+        }
+        
+        if cameraManager.isLiDAREnabled {
+            components.append("LiDAR activé")
+        }
+        
+        if components.isEmpty {
+            return "Configuration minimale appliquée"
+        } else if components.count == 1 {
+            return "Configuration: \(components[0])"
+        } else {
+            let lastComponent = components.removeLast()
+            return "Configuration: \(components.joined(separator: ", ")) et \(lastComponent)"
+        }
+    }
     // MARK: - Detection Labels View
     private func detectionLabelsView(for detection: (rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double)), geometry: GeometryProxy, rect: CGRect) -> some View {
         HStack(spacing: 4) {
@@ -683,6 +774,7 @@ struct DetectionView: View {
         }
         
         voiceInteractionManager.setVoiceSynthesisManager(voiceSynthesisManager)
+        cameraManager.setVoiceSynthesisManager(voiceSynthesisManager)
     }
     
     // MARK: - Timer Management

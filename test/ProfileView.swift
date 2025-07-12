@@ -1,22 +1,20 @@
 //
-//  ProfileView.swift
+//  ProfileView.swift - QUESTIONNAIRE SIMPLIFIÉ
 //  test
 //
-//  Created by Samy 📍 on 07/07/2025.
+//  Questionnaire réduit à 3 questions essentielles qui configurent vraiment l'app
 //
 import SwiftUI
 import AVFoundation
 
-
-
-// Structure pour les questions
+// Structure pour les questions - SIMPLIFIÉ À 3 QUESTIONS
 struct Question {
     let id: Int
     let text: String
     let spokenText: String // Texte complet pour la synthèse vocale
 }
 
-// Gestionnaire de sauvegarde
+// Gestionnaire de sauvegarde - INCHANGÉ
 class QuestionnaireManager: ObservableObject {
     @Published var responses: [Int: Bool] = [:]
     
@@ -59,32 +57,22 @@ struct QuestionnaireView: View {
     @State private var isComplete = false
     @State private var hasAnswered = false
     
-    // Les 5 questions du questionnaire
+    // 🎯 NOUVEAU: 3 questions essentielles qui configurent vraiment l'app
     private let questions = [
         Question(
             id: 1,
-            text: "Utilisez-vous régulièrement des applications de navigation ?",
-            spokenText: "Question 1 sur 5. Utilisez-vous régulièrement des applications de navigation ? Appuyez à gauche de l'écran pour non, à droite pour oui."
+            text: "Voulez-vous être averti vocalement des objets proches ?",
+            spokenText: "Question 1 sur 3. Voulez-vous être averti vocalement des objets proches ? Cela active les alertes audio pour les obstacles dangereux. Appuyez à gauche de l'écran pour non, à droite pour oui."
         ),
         Question(
             id: 2,
-            text: "Souhaitez-vous être averti des obstacles à distance ?",
-            spokenText: "Question 2 sur 5. Souhaitez-vous être averti des obstacles à distance ? Appuyez à gauche de l'écran pour non, à droite pour oui."
+            text: "Voulez-vous des vibrations pour les alertes de proximité ?",
+            spokenText: "Question 2 sur 3. Voulez-vous des vibrations pour les alertes de proximité ? Cela fait vibrer votre téléphone quand un objet est très proche. Appuyez à gauche de l'écran pour non, à droite pour oui."
         ),
         Question(
             id: 3,
-            text: "Préférez-vous les alertes vocales aux vibrations ?",
-            spokenText: "Question 3 sur 5. Préférez-vous les alertes vocales aux vibrations ? Appuyez à gauche de l'écran pour non, à droite pour oui."
-        ),
-        Question(
-            id: 4,
-            text: "Utilisez-vous fréquemment les transports en commun ?",
-            spokenText: "Question 4 sur 5. Utilisez-vous fréquemment les transports en commun ? Appuyez à gauche de l'écran pour non, à droite pour oui."
-        ),
-        Question(
-            id: 5,
-            text: "Souhaitez-vous des descriptions détaillées de l'environnement ?",
-            spokenText: "Question 5 sur 5. Souhaitez-vous des descriptions détaillées de l'environnement ? Appuyez à gauche de l'écran pour non, à droite pour oui."
+            text: "Voulez-vous pouvoir communiquer vocalement avec l'application ?",
+            spokenText: "Question 3 sur 3. Voulez-vous pouvoir communiquer vocalement avec l'application ? Cela vous permet de poser des questions sur votre environnement par appui long. Appuyez à gauche de l'écran pour non, à droite pour oui."
         )
     ]
     
@@ -113,16 +101,44 @@ struct QuestionnaireView: View {
                             .font(.system(size: 80))
                             .foregroundColor(Color(hex: "5ee852"))
                         
-                        Text("Questionnaire terminé !")
+                        Text("Configuration terminée !")
                             .font(.largeTitle)
                             .fontWeight(.bold)
                             .foregroundColor(Color(hex: "f0fff0"))
                             .multilineTextAlignment(.center)
                         
-                        Text("Vos réponses ont été sauvegardées")
+                        Text("Vos préférences ont été sauvegardées")
                             .font(.title2)
                             .foregroundColor(Color(hex: "f0fff0").opacity(0.8))
                             .multilineTextAlignment(.center)
+                        
+                        // 🎯 NOUVEAU: Résumé des choix
+                        VStack(spacing: 8) {
+                            HStack {
+                                Image(systemName: "speaker.wave.2.fill")
+                                    .foregroundColor(manager.responses[1] == true ? Color(hex: "5ee852") : .red)
+                                Text("Alertes vocales: \(manager.responses[1] == true ? "ACTIVÉES" : "DÉSACTIVÉES")")
+                                    .foregroundColor(Color(hex: "f0fff0").opacity(0.9))
+                            }
+                            
+                            HStack {
+                                Image(systemName: "iphone.radiowaves.left.and.right")
+                                    .foregroundColor(manager.responses[2] == true ? .orange : .red)
+                                Text("Vibrations: \(manager.responses[2] == true ? "ACTIVÉES" : "DÉSACTIVÉES")")
+                                    .foregroundColor(Color(hex: "f0fff0").opacity(0.9))
+                            }
+                            
+                            HStack {
+                                Image(systemName: "mic.fill")
+                                    .foregroundColor(manager.responses[3] == true ? .blue : .red)
+                                Text("Communication vocale: \(manager.responses[3] == true ? "ACTIVÉE" : "DÉSACTIVÉE")")
+                                    .foregroundColor(Color(hex: "f0fff0").opacity(0.9))
+                            }
+                        }
+                        .font(.subheadline)
+                        .padding()
+                        .background(Color(hex: "0a1f0a").opacity(0.5))
+                        .cornerRadius(12)
                     }
                     
                     Spacer()
@@ -134,7 +150,7 @@ struct QuestionnaireView: View {
                             window.rootViewController = UIHostingController(rootView: MainAppView())
                         }
                     }) {
-                        Text("Commencer l'expérience")
+                        Text("Démarrer l'application")
                             .font(.title2)
                             .fontWeight(.semibold)
                             .foregroundColor(Color(hex: "0a1f0a"))
@@ -147,7 +163,7 @@ struct QuestionnaireView: View {
                     .padding(.bottom, 40)
                 }
                 .onAppear {
-                    speechSynthesizer.speak("Questionnaire terminé ! Vos réponses ont été sauvegardées. Appuyez sur le bouton pour commencer l'expérience.")
+                    speechSynthesizer.speak("Configuration terminée ! Vos préférences ont été sauvegardées. Appuyez sur le bouton pour démarrer l'application.")
                 }
                 
             } else {
@@ -155,7 +171,7 @@ struct QuestionnaireView: View {
                 VStack(spacing: 0) {
                     // Zone de question en haut
                     VStack(spacing: 30) {
-                        Text("Question \(currentQuestionIndex + 1)/\(questions.count)")
+                        Text("Configuration \(currentQuestionIndex + 1)/\(questions.count)")
                             .font(.title3)
                             .fontWeight(.medium)
                             .foregroundColor(Color(hex: "5ee852"))
@@ -295,7 +311,7 @@ struct QuestionnaireView: View {
     }
 }
 
-// Gestionnaire de synthèse vocale
+// Gestionnaire de synthèse vocale - INCHANGÉ
 class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     private let synthesizer = AVSpeechSynthesizer()
     

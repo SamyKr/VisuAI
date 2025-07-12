@@ -4,14 +4,13 @@
 //
 //  Modified by Assistant - Annonces vocales uniquement pour dangers immédiats
 //  Système de synthèse vocale pour piétons aveugles - MODE CRITIQUE SEULEMENT
-//  FIXÉ: Distance critique dynamique avec debug complet
 //
 
 import Foundation
 import AVFoundation
 import UIKit
 
-// MARK: - Enums et Structures (simplifiés)
+// MARK: - Enums et Structures
 
 enum DistanceZone {
     case critical   // < distance critique - SEULE ZONE QUI DÉCLENCHE UNE ANNONCE
@@ -58,19 +57,49 @@ struct VoiceMessage {
     let timestamp: Date
 }
 
-// MARK: - VoiceSynthesisManager (Version simplifiée - Critiques seulement)
+struct ObjectMovement {
+    let previousDistance: Float
+    let currentDistance: Float
+    let isApproaching: Bool
+    let isMovingAway: Bool
+    
+    init(previous: Float, current: Float) {
+        self.previousDistance = previous
+        self.currentDistance = current
+        let threshold: Float = 0.3 // Seuil pour considérer un mouvement significatif
+        self.isApproaching = (previous - current) > threshold
+        self.isMovingAway = (current - previous) > threshold
+    }
+}
+
+// MARK: - VoiceSynthesisManager
 
 class VoiceSynthesisManager: NSObject, ObservableObject {
     
-    // MARK: - Configuration simplifiée
-    private var criticalDistance: Float = 2.0  // ✅ FIXÉ: var au lieu de let
-    private let minimumRepeatInterval: TimeInterval = 1.5  // Éviter spam pour même objet
+    // MARK: - Configuration
+    private var criticalDistance: Float = 2.0
+    private let minimumRepeatInterval: TimeInterval = 3.0  // Interval plus long pour éviter spam
+    private let movementUpdateInterval: TimeInterval = 2.0 // Pour les annonces de mouvement
     
-    // MARK: - État interne minimal
-    private var lastCriticalAnnouncements: [Int: Date] = [:] // Par objet
+    // 🎯 NOUVEAU: Contrôle du rythme global des annonces
+    private let globalAnnouncementCooldown: TimeInterval = 2.5  // Délai minimum entre TOUTES les annonces
+    private var lastGlobalAnnouncement: Date = Date.distantPast
+    private let maxSimultaneousAnnouncements: Int = 2  // Max 2 annonces dans la queue
+    
+    // 🎯 NOUVEAU: Liste dynamique des objets dangereux
+    private var dangerousObjects: Set<String> = [
+        "person", "cyclist", "motorcyclist",
+        "car", "truck", "bus", "motorcycle", "bicycle",
+        "pole", "traffic cone", "barrier", "temporary barrier"
+    ]
+    
+    // MARK: - État interne
+    private var lastCriticalAnnouncements: [Int: Date] = [:]
+    private var lastMovementAnnouncements: [Int: Date] = [:] // Séparé pour les mouvements
+    private var objectDistanceHistory: [Int: Float] = [:] // Pour tracker le mouvement
     private var messageQueue: [VoiceMessage] = []
     
-    // MARK: - Support pour interaction vocale (conservé)
+    // MARK: - Support pour interaction vocale
     @Published var isInterrupted = false
     private var interruptionReason: String = ""
     private var lastInterruptionTime: Date = Date.distantPast
@@ -80,8 +109,9 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
     private let speechSynthesizer = AVSpeechSynthesizer()
     private var isCurrentlySpeaking = false
     
-    // MARK: - Dictionnaire de traduction (simplifié pour objets dangereux)
+    // MARK: - Dictionnaire de traduction
     private let translationDictionary: [String: String] = [
+        // Véhicules et usagers
         "person": "personne",
         "cyclist": "cycliste",
         "motorcyclist": "motocycliste",
@@ -90,48 +120,105 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         "bus": "bus",
         "motorcycle": "moto",
         "bicycle": "vélo",
+        "slow_vehicle": "véhicule lent",
+        "vehicle_group": "groupe de véhicules",
+        "rail_vehicle": "véhicule ferroviaire",
+        "boat": "bateau",
+        
+        // Infrastructure routière
+        "sidewalk": "trottoir",
+        "road": "route",
+        "crosswalk": "passage piéton",
+        "driveway": "allée",
+        "bike_lane": "piste cyclable",
+        "parking_area": "zone de stationnement",
+        "rail_track": "voie ferrée",
+        "service_lane": "voie de service",
+        "curb": "bordure",
+        
+        // Barrières et obstacles
+        "wall": "mur",
+        "fence": "clôture",
+        "guard_rail": "glissière de sécurité",
+        "temporary_barrier": "barrière temporaire",
+        "barrier_other": "autre barrière",
+        "barrier": "barrière",
         "pole": "poteau",
-        "traffic cone": "cône",
-        "barrier": "barrière"
+        
+        // Signalisation et équipements
+        "traffic_light": "feu de circulation",
+        "traffic_sign": "panneau de signalisation",
+        "street_light": "lampadaire",
+        "traffic_cone": "cône",
+        
+        // Mobilier urbain
+        "bench": "banc",
+        "trash_can": "poubelle",
+        "fire_hydrant": "bouche d'incendie",
+        "mailbox": "boîte aux lettres",
+        "parking_meter": "parcmètre",
+        "bike_rack": "support à vélos",
+        "phone_booth": "cabine téléphonique",
+        
+        // Éléments de voirie
+        "pothole": "nid-de-poule",
+        "manhole": "plaque d'égout",
+        "catch_basin": "regard d'égout",
+        "water_valve": "vanne d'eau",
+        "junction_box": "boîtier de jonction",
+        
+        // Structures et environnement
+        "building": "bâtiment",
+        "bridge": "pont",
+        "tunnel": "tunnel",
+        "garage": "garage",
+        "vegetation": "végétation",
+        "water": "eau",
+        "terrain": "terrain",
+        "animals": "animaux"
     ]
     
     override init() {
         super.init()
         speechSynthesizer.delegate = self
         setupAudioSession()
-        
-        // ✅ CHARGER LA DISTANCE CRITIQUE DEPUIS UserDefaults AU DÉMARRAGE
         loadCriticalDistanceFromUserDefaults()
-        
-        print("🗣️ VoiceSynthesisManager initialisé - MODE CRITIQUE SEULEMENT")
-        print("🎯 Distance critique initiale: \(criticalDistance)m")
     }
     
-    // ✅ NOUVELLE MÉTHODE : Charger depuis UserDefaults
+    // MARK: - Configuration
+    
     private func loadCriticalDistanceFromUserDefaults() {
         let userDefaults = UserDefaults.standard
-        let savedDistance = userDefaults.float(forKey: "safety_critical_distance")  // Même clé que SafetyParametersManager
+        let savedDistance = userDefaults.float(forKey: "safety_critical_distance")
         
         if savedDistance > 0 {
             criticalDistance = savedDistance
-            print("✅ Distance critique chargée depuis UserDefaults: \(String(format: "%.2f", criticalDistance))m")
-        } else {
-            print("ℹ️ Aucune distance sauvegardée, utilisation valeur par défaut: \(String(format: "%.2f", criticalDistance))m")
         }
     }
     
-    // ✅ FIXÉ: Méthode avec debug complet
     func updateCriticalDistance(_ distance: Float) {
-        let oldDistance = criticalDistance
         criticalDistance = distance
-        print("🚨 DISTANCE CRITIQUE MISE À JOUR:")
-        print("   - Ancienne distance: \(String(format: "%.2f", oldDistance))m")
-        print("   - Nouvelle distance: \(String(format: "%.2f", criticalDistance))m")
-        print("   - Changement effectif: \(oldDistance != criticalDistance ? "✅ OUI" : "❌ NON")")
+        lastCriticalAnnouncements.removeAll() // Appliquer immédiatement
+        lastMovementAnnouncements.removeAll()
+        objectDistanceHistory.removeAll()
+    }
+    
+    // 🎯 NOUVEAU: Mise à jour des objets dangereux
+    func updateDangerousObjects(_ objects: Set<String>) {
+        let oldObjects = dangerousObjects
+        dangerousObjects = objects
         
-        // Vider le cache des annonces pour appliquer immédiatement
+        // 🐛 DEBUG: Vérifier la mise à jour
+        print("🔧 DEBUG VoiceSynthesis - Objets dangereux mis à jour:")
+        print("   - Anciens: \(Array(oldObjects).sorted())")
+        print("   - Nouveaux: \(Array(dangerousObjects).sorted())")
+        print("   - 'car' présent: \(dangerousObjects.contains("car"))")
+        
+        // Vider les caches pour appliquer immédiatement
         lastCriticalAnnouncements.removeAll()
-        print("   - Cache des annonces vidé pour effet immédiat")
+        lastMovementAnnouncements.removeAll()
+        objectDistanceHistory.removeAll()
+        print("   - Caches vidés pour effet immédiat")
     }
     
     private func setupAudioSession() {
@@ -151,44 +238,34 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             )
             
             try audioSession.setActive(true)
-            try audioSession.overrideOutputAudioPort(.none) // Laisser le système choisir
-            
-            print("✅ Session audio configurée pour dangers critiques")
+            try audioSession.overrideOutputAudioPort(.none)
             
         } catch {
             print("❌ Erreur configuration audio: \(error)")
         }
     }
     
-    // MARK: - Méthodes d'interaction (conservées)
+    // MARK: - Méthodes d'interaction
     
-    /// Interrompt immédiatement la synthèse pour permettre l'interaction
     func interruptForInteraction(reason: String = "Interaction utilisateur") {
         let currentTime = Date()
         
         guard currentTime.timeIntervalSince(lastInterruptionTime) >= interruptionCooldown else {
-            print("⏸️ Interruption ignorée - cooldown actif")
             return
         }
-        
-        print("🛑 Interruption pour interaction: \(reason)")
         
         isInterrupted = true
         interruptionReason = reason
         lastInterruptionTime = currentTime
         
         speechSynthesizer.stopSpeaking(at: .immediate)
-        messageQueue.removeAll() // Vider complètement - les dangers critiques seront re-détectés
+        messageQueue.removeAll()
         isCurrentlySpeaking = false
-        
-        print("📢 Synthèse interrompue")
     }
     
-    /// Reprend les annonces automatiques après interaction
     func resumeAfterInteraction() {
         guard isInterrupted else { return }
         
-        print("▶️ Reprise de la surveillance critique")
         isInterrupted = false
         interruptionReason = ""
         
@@ -197,11 +274,10 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         }
     }
     
-    /// Méthode pour parler directement (priorité interaction)
     func speakInteraction(_ text: String) {
         let interactionMessage = VoiceMessage(
             text: text,
-            objectId: -999, // ID spécial pour interaction
+            objectId: -999,
             timestamp: Date()
         )
         
@@ -210,23 +286,21 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         if !isCurrentlySpeaking {
             processMessageQueue()
         }
-        
-        print("🎤 Message d'interaction ajouté: '\(text)'")
     }
     
-    // MARK: - Interface principale (SIMPLIFIÉE - Critiques seulement)
+    // MARK: - Interface principale
     
     func processImportantObjects(_ importantObjects: [(object: TrackedObject, score: Float)]) {
-        // Si interrompu pour interaction, suspendre complètement
         if isInterrupted {
-            print("⏸️ Surveillance suspendue - interaction en cours")
             return
         }
         
-        print("🎯 Analyse de \(importantObjects.count) objets pour dangers critiques (seuil: \(String(format: "%.2f", criticalDistance))m)")
-        
+        // Arrêt immédiat si plus rien à détecter
         guard !importantObjects.isEmpty else {
-            handleEmptyObjectList()
+            stopSpeaking() // Arrêt immédiat au lieu d'attendre
+            lastCriticalAnnouncements.removeAll()
+            lastMovementAnnouncements.removeAll()
+            objectDistanceHistory.removeAll()
             return
         }
         
@@ -237,87 +311,100 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             announceCriticalThreats(criticalThreats, currentTime: currentTime)
         }
         
+        // Mettre à jour l'historique des distances
+        updateDistanceHistory(importantObjects)
         cleanupOldAnnouncements(currentObjects: importantObjects)
     }
     
-    // MARK: - ✅ FIXÉ: Détection des menaces critiques avec debug complet
+    // MARK: - Détection des menaces critiques
     
     private func detectCriticalThreats(_ objects: [(object: TrackedObject, score: Float)], currentTime: Date) -> [TrackedObject] {
-        var criticalThreats: [TrackedObject] = []
+        // 🎯 NOUVEAU: Vérifier le cooldown global
+        let timeSinceLastGlobalAnnouncement = currentTime.timeIntervalSince(lastGlobalAnnouncement)
+        if timeSinceLastGlobalAnnouncement < globalAnnouncementCooldown {
+            return [] // Trop tôt pour une nouvelle annonce
+        }
         
-        print("🔍 DÉTECTION avec distance critique = \(String(format: "%.2f", criticalDistance))m, \(objects.count) objets à analyser")
+        // 🎯 NOUVEAU: Vérifier si la queue n'est pas déjà pleine
+        if messageQueue.count >= maxSimultaneousAnnouncements {
+            return [] // Queue pleine, attendre qu'elle se vide
+        }
         
-        for (object, score) in objects {
+        var newThreats: [TrackedObject] = []
+        var movementThreats: [TrackedObject] = []
+        
+        for (object, _) in objects {
+            guard let distance = object.distance else { continue }
+            
             // 1. Vérifier si l'objet est à distance critique
-            let zone = DistanceZone.from(distance: object.distance, criticalDistance: criticalDistance)
+            let zone = DistanceZone.from(distance: distance, criticalDistance: criticalDistance)
+            guard zone == .critical && isDangerousObject(object) else { continue }
             
-            // 🐛 DEBUG TRÈS DÉTAILLÉ
-            if let distance = object.distance {
-                let isUnderThreshold = distance < criticalDistance
-                print("   📏 #\(object.trackingNumber) \(object.label):")
-                print("       Distance mesurée: \(String(format: "%.2f", distance))m")
-                print("       Seuil critique: \(String(format: "%.2f", criticalDistance))m")
-                print("       Test: \(String(format: "%.2f", distance)) < \(String(format: "%.2f", criticalDistance)) = \(isUnderThreshold)")
-                print("       Zone calculée: \(zone == .critical ? "🚨 CRITIQUE" : "✅ SÛR")")
-            } else {
-                print("   📏 #\(object.trackingNumber) \(object.label): ❌ PAS DE DISTANCE LiDAR")
-            }
+            let objectId = object.trackingNumber
+            let hasBeenAnnounced = lastCriticalAnnouncements[objectId] != nil
             
-            guard zone == .critical else {
-                print("       → IGNORÉ (pas critique)")
+            // 2. Objets jamais annoncés = priorité absolue
+            if !hasBeenAnnounced {
+                newThreats.append(object)
                 continue
             }
             
-            // 2. Vérifier qu'on n'a pas déjà annoncé cet objet récemment
-            if let lastAnnouncement = lastCriticalAnnouncements[object.trackingNumber] {
+            // 3. Pour objets déjà annoncés, vérifier le timing
+            if let lastAnnouncement = lastCriticalAnnouncements[objectId] {
                 let timeSinceLastAnnouncement = currentTime.timeIntervalSince(lastAnnouncement)
                 if timeSinceLastAnnouncement < minimumRepeatInterval {
-                    print("       → IGNORÉ (spam protection: \(String(format: "%.1f", timeSinceLastAnnouncement))s < \(minimumRepeatInterval)s)")
-                    continue
+                    continue // Trop récent
                 }
             }
             
-            // 3. Filtrer les objets vraiment dangereux
-            if isDangerousObject(object) {
-                criticalThreats.append(object)
-                print("       → 🚨 AJOUTÉ AUX MENACES CRITIQUES")
-            } else {
-                print("       → IGNORÉ (pas un type dangereux)")
+            // 4. Vérifier le mouvement pour objets déjà annoncés
+            if let previousDistance = objectDistanceHistory[objectId] {
+                let movement = ObjectMovement(previous: previousDistance, current: distance)
+                
+                // Annoncer mouvement seulement si significatif et pas trop récent
+                if (movement.isApproaching || movement.isMovingAway) {
+                    if let lastMovement = lastMovementAnnouncements[objectId] {
+                        let timeSinceMovement = currentTime.timeIntervalSince(lastMovement)
+                        if timeSinceMovement >= movementUpdateInterval {
+                            movementThreats.append(object)
+                        }
+                    } else {
+                        movementThreats.append(object)
+                    }
+                }
             }
         }
         
-        print("🔍 RÉSULTAT FINAL: \(criticalThreats.count) menace(s) critique(s) détectée(s)")
-        if criticalThreats.isEmpty {
-            print("   → Aucune annonce vocale ne sera faite")
-        } else {
-            for threat in criticalThreats {
-                print("   → Annonce prévue: \(threat.label) #\(threat.trackingNumber)")
-            }
+        // Prioriser: nouveaux objets en premier, puis mouvements
+        var result = newThreats
+        if result.isEmpty && !movementThreats.isEmpty {
+            result = Array(movementThreats.prefix(1)) // 🎯 RÉDUIT: Max 1 mouvement à la fois
         }
         
-        return criticalThreats
+        // 🎯 NOUVEAU: Limiter à 1 annonce à la fois pour éviter l'enchaînement
+        if !result.isEmpty {
+            result = Array(result.prefix(1))
+        }
+        
+        return result
     }
     
     private func isDangerousObject(_ object: TrackedObject) -> Bool {
         let label = object.label.lowercased()
+        let isDangerous = dangerousObjects.contains(label)
         
-        // Objets physiques dangereux pour un piéton
-        let dangerousTypes = [
-            "person", "cyclist", "motorcyclist",
-            "car", "truck", "bus", "motorcycle", "bicycle",
-            "pole", "traffic cone", "barrier", "temporary barrier"
-        ]
+        // 🐛 DEBUG: Afficher chaque vérification
+        print("🔍 Vérification objet: '\(label)' → \(isDangerous ? "DANGEREUX" : "SAFE")")
+        if label == "car" {
+            print("   ⚠️ ATTENTION: Objet 'car' détecté - Liste actuelle: \(Array(dangerousObjects).sorted())")
+        }
         
-        let isDangerous = dangerousTypes.contains(label)
-        print("           Vérification type dangereux: '\(label)' = \(isDangerous)")
         return isDangerous
     }
     
     private func announceCriticalThreats(_ threats: [TrackedObject], currentTime: Date) {
-        print("🚨 PRÉPARATION ANNONCE de \(threats.count) menace(s) critique(s)")
-        
         for threat in threats {
-            let message = createCriticalThreatMessage(threat)
+            let message = createCriticalThreatMessage(threat, currentTime: currentTime)
             let voiceMessage = VoiceMessage(
                 text: message,
                 objectId: threat.trackingNumber,
@@ -327,25 +414,57 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             messageQueue.append(voiceMessage)
             lastCriticalAnnouncements[threat.trackingNumber] = currentTime
             
-            print("   → Message ajouté: '\(message)'")
+            // Marquer aussi comme annonce de mouvement si c'était un mouvement
+            if objectDistanceHistory[threat.trackingNumber] != nil {
+                lastMovementAnnouncements[threat.trackingNumber] = currentTime
+            }
         }
+        
+        // 🎯 NOUVEAU: Mettre à jour le timestamp global
+        lastGlobalAnnouncement = currentTime
         
         processMessageQueue()
     }
     
-    private func createCriticalThreatMessage(_ object: TrackedObject) -> String {
+    private func createCriticalThreatMessage(_ object: TrackedObject, currentTime: Date) -> String {
         let frenchLabel = translateLabel(object.label)
         let direction = Direction.from(boundingBox: object.lastRect)
+        let objectId = object.trackingNumber
         
-        // Message court et urgent pour danger immédiat
-        let message = "ATTENTION ! \(frenchLabel) \(direction.rawValue) !"
+        // Vérifier si c'est un nouvel objet ou un mouvement
+        let isNewObject = lastCriticalAnnouncements[objectId] == nil
         
-        // Ajouter la distance si disponible pour le debug
-        if let distance = object.distance {
-            print("           Message pour objet à \(String(format: "%.2f", distance))m: '\(message)'")
+        if isNewObject {
+            // Nouveau danger - message avec distance si proche
+            if let distance = object.distance {
+                if distance < 1.0 {
+                    return "DANGER ! \(frenchLabel) très proche \(direction.rawValue) !"
+                } else if distance < 1.5 {
+                    let roundedDistance = Int(distance.rounded())
+                    let meterText = roundedDistance == 1 ? "mètre" : "mètres"
+                    return "ATTENTION ! \(frenchLabel) \(direction.rawValue) à \(roundedDistance) \(meterText) !"
+                } else {
+                    return "ATTENTION ! \(frenchLabel) \(direction.rawValue) !"
+                }
+            } else {
+                return "ATTENTION ! \(frenchLabel) \(direction.rawValue) !"
+            }
+        } else {
+            // Objet déjà connu - vérifier le mouvement
+            if let previousDistance = objectDistanceHistory[objectId],
+               let currentDistance = object.distance {
+                let movement = ObjectMovement(previous: previousDistance, current: currentDistance)
+                
+                if movement.isApproaching {
+                    return "\(frenchLabel) se rapproche \(direction.rawValue) !"
+                } else if movement.isMovingAway {
+                    return "\(frenchLabel) s'éloigne \(direction.rawValue)"
+                }
+            }
+            
+            // Fallback si pas de mouvement détecté
+            return "\(frenchLabel) toujours \(direction.rawValue)"
         }
-        
-        return message
     }
     
     private func translateLabel(_ englishLabel: String) -> String {
@@ -356,29 +475,20 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
     
     private func processMessageQueue() {
         guard !isInterrupted && !isCurrentlySpeaking && !messageQueue.isEmpty else {
-            if isInterrupted {
-                print("📢 Queue bloquée: interaction en cours")
-            } else if isCurrentlySpeaking {
-                print("📢 Queue bloquée: synthèse en cours")
-            } else if messageQueue.isEmpty {
-                print("📢 Queue vide: rien à dire")
-            }
             return
         }
         
         let message = messageQueue.removeFirst()
         speakInternal(message.text)
-        print("🗣️ SYNTHÈSE DÉMARRÉE: '\(message.text)'")
     }
     
     private func speakInternal(_ text: String) {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "fr-FR")
-        utterance.rate = 0.65  // Légèrement plus rapide pour urgence
+        utterance.rate = 0.65
         utterance.volume = 1.0
-        utterance.pitchMultiplier = 1.1  // Légèrement plus aigu pour attirer l'attention
+        utterance.pitchMultiplier = 1.1
         
-        print("🔊 Paramètres synthèse: rate=\(utterance.rate), volume=\(utterance.volume)")
         isCurrentlySpeaking = true
         speechSynthesizer.speak(utterance)
     }
@@ -395,78 +505,79 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         speechSynthesizer.stopSpeaking(at: .immediate)
         messageQueue.removeAll()
         isCurrentlySpeaking = false
-        print("🛑 Synthèse arrêtée et queue vidée")
     }
     
     // MARK: - Nettoyage et maintenance
     
-    private func handleEmptyObjectList() {
-        if isCurrentlySpeaking || !messageQueue.isEmpty {
-            print("🔄 Liste d'objets vide - arrêt synthèse en cours")
-            stopSpeaking()
-        }
-        
-        // Nettoyer les annonces anciennes après un délai
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-            self?.lastCriticalAnnouncements.removeAll()
-            print("🧹 Cache des annonces nettoyé (liste vide)")
+    private func updateDistanceHistory(_ objects: [(object: TrackedObject, score: Float)]) {
+        for (object, _) in objects {
+            if let distance = object.distance {
+                objectDistanceHistory[object.trackingNumber] = distance
+            }
         }
     }
     
     private func cleanupOldAnnouncements(currentObjects: [(object: TrackedObject, score: Float)]) {
         let currentObjectIds = Set(currentObjects.map { $0.object.trackingNumber })
-        let absentObjectIds = Set(lastCriticalAnnouncements.keys).subtracting(currentObjectIds)
         
+        // Nettoyer les objets qui ne sont plus détectés
+        let absentObjectIds = Set(lastCriticalAnnouncements.keys).subtracting(currentObjectIds)
         for objectId in absentObjectIds {
             lastCriticalAnnouncements.removeValue(forKey: objectId)
-            print("🧹 Objet #\(objectId) retiré du cache (plus détecté)")
+            lastMovementAnnouncements.removeValue(forKey: objectId)
+            objectDistanceHistory.removeValue(forKey: objectId)
         }
     }
     
     func clearAllState() {
         stopSpeaking()
         lastCriticalAnnouncements.removeAll()
+        lastMovementAnnouncements.removeAll()
+        objectDistanceHistory.removeAll()
         
-        // Reset état interaction
+        // 🎯 NOUVEAU: Réinitialiser le cooldown global
+        lastGlobalAnnouncement = Date.distantPast
+        
         isInterrupted = false
         interruptionReason = ""
         lastInterruptionTime = Date.distantPast
-        
-        print("🔄 État complet réinitialisé - Mode critique seulement")
     }
     
     func getStats() -> String {
         let interruptionStatus = isInterrupted ? "⏸️ Interrompu (\(interruptionReason))" : "🚨 Surveillance active"
+        let queueStatus = messageQueue.count >= maxSimultaneousAnnouncements ? "🚫 PLEINE" : "✅ OK"
         
         return """
-        🗣️ VoiceSynthesisManager - MODE CRITIQUE SEULEMENT:
+        🗣️ VoiceSynthesisManager - MODE CRITIQUE OPTIMISÉ:
            - État: \(isCurrentlySpeaking ? "En cours" : "Silencieux")
            - Mode: \(interruptionStatus)
            - Distance critique: \(String(format: "%.2f", criticalDistance))m
-           - Messages en attente: \(messageQueue.count)
+           - Messages en attente: \(messageQueue.count)/\(maxSimultaneousAnnouncements) \(queueStatus)
            - Objets surveillés: \(lastCriticalAnnouncements.count)
+           - Mouvements trackés: \(objectDistanceHistory.count)
+           - Objets dangereux configurés: \(dangerousObjects.count)
+           - Cooldown global: \(String(format: "%.1f", globalAnnouncementCooldown))s
         
-        🚨 UNIQUEMENT: Dangers immédiats (< \(String(format: "%.2f", criticalDistance))m)
-        🎤 Support interaction: Interruption + Reprise
-        ⚡ Messages urgents et concis
+        🚨 Fonctionnalités optimisées:
+           - Arrêt immédiat si plus de détection
+           - Messages variés avec distance et mouvement
+           - Priorisation nouveaux objets > mouvements
+           - Anti-spam intelligent (3s objets, 2s mouvements)
+           - Cooldown global de \(String(format: "%.1f", globalAnnouncementCooldown))s entre annonces
+           - Max \(maxSimultaneousAnnouncements) annonces simultanées
+           - 1 seule annonce à la fois pour éviter l'enchaînement
         """
     }
     
-    // ✅ AJOUTÉ: Méthode de diagnostic
-    func debugCurrentSettings() {
-        print("🔧 DIAGNOSTIC VoiceSynthesisManager:")
-        print("   - Distance critique actuelle: \(String(format: "%.2f", criticalDistance))m")
-        print("   - État interruption: \(isInterrupted)")
-        print("   - Synthèse en cours: \(isCurrentlySpeaking)")
-        print("   - Messages en queue: \(messageQueue.count)")
-        print("   - Cache annonces: \(lastCriticalAnnouncements.count) objets")
-        print("   - Intervalle anti-spam: \(minimumRepeatInterval)s")
+    // 🎯 NOUVEAU: Méthode pour ajuster le rythme des annonces
+    func setAnnouncementRate(cooldown: TimeInterval, maxQueue: Int = 2) {
+        // Cette méthode pourrait être appelée depuis les paramètres si vous voulez un contrôle utilisateur
+        // Pour l'instant, les valeurs sont hardcodées mais facilement modifiables
     }
 }
 
 extension VoiceSynthesisManager: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        print("✅ Synthèse terminée: '\(utterance.speechString)'")
         isCurrentlySpeaking = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.processMessageQueue()
@@ -474,11 +585,10 @@ extension VoiceSynthesisManager: AVSpeechSynthesizerDelegate {
     }
     
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        print("❌ Synthèse annulée: '\(utterance.speechString)'")
         isCurrentlySpeaking = false
     }
     
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-        print("▶️ Synthèse démarrée: '\(utterance.speechString)'")
+        // Synthèse démarrée
     }
 }

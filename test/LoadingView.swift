@@ -338,15 +338,15 @@ struct MainAppView: View {
     }
     
     private func checkQuestionnaireStatus() {
-        let hasCompleteProfile = questionnaireManager.responses.count == 5
+        let hasCompleteProfile = questionnaireManager.responses.count > 2
         
         if hasCompleteProfile {
             // Profil complet → Aller directement à l'app
-            print("✅ Profil utilisateur complet (\(questionnaireManager.responses.count)/5 réponses)")
+            print("✅ Profil utilisateur complet (\(questionnaireManager.responses.count)/3 réponses)")
             showQuestionnaire = false
         } else {
             // Première utilisation ou profil incomplet → Questionnaire
-            print("📝 Première utilisation ou profil incomplet (\(questionnaireManager.responses.count)/5 réponses)")
+            print("📝 Première utilisation ou profil incomplet (\(questionnaireManager.responses.count)/3 réponses)")
             showQuestionnaire = true
         }
     }

@@ -1,11 +1,12 @@
 //
-//  CameraManager.swift (Version avec LiDAR + Tracking)
+//  CameraManager.swift (Version avec LiDAR + Tracking + Objets Dangereux)
 //  test
 //
 //  Created by Samy 📍 on 18/06/2025.
 //  Updated with LiDAR integration - 19/06/2025
 //  Updated with Object Tracking - 20/06/2025
 //  Updated with new class management system - 08/07/2025
+//  Updated with dangerous objects system - 12/07/2025
 //
 
 import AVFoundation
@@ -102,7 +103,7 @@ class CameraManager: NSObject, ObservableObject {
         return previewLayer!
     }
     
-    // MARK: -- Update Distance Critique
+    // MARK: -- Voice Synthesis Management
     func setVoiceSynthesisManager(_ manager: VoiceSynthesisManager) {
         self.voiceSynthesisManager = manager
     }
@@ -110,6 +111,18 @@ class CameraManager: NSObject, ObservableObject {
     func updateCriticalDistance(_ distance: Float) {
         // Transmettre au VoiceSynthesisManager
         voiceSynthesisManager?.updateCriticalDistance(distance)
+    }
+    
+    // 🎯 NOUVEAU: Gestion des objets dangereux
+    func updateDangerousObjects(_ dangerousObjects: Set<String>) {
+        // 🐛 DEBUG: Vérifier l'appel
+        print("🎥 CameraManager.updateDangerousObjects appelée:")
+        print("   - Objets reçus: \(Array(dangerousObjects).sorted())")
+        print("   - VoiceSynthesisManager connecté: \(voiceSynthesisManager != nil)")
+        
+        // Transmettre au VoiceSynthesisManager
+        voiceSynthesisManager?.updateDangerousObjects(dangerousObjects)
+        print("   - Transmission vers VoiceSynthesisManager effectuée")
     }
     
     // MARK: - Tracking Controls
