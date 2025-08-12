@@ -566,3 +566,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
     }
 }
+
+
+
+extension CameraManager {
+    
+    // NOUVEAU : Met à jour les objets dynamiques séparément
+    func updateDynamicDangerousObjects(_ objects: Set<String>) {
+        voiceSynthesisManager?.updateDynamicDangerousObjects(objects)
+    }
+}

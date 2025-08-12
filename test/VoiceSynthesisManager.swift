@@ -2,9 +2,9 @@
 //  VoiceSynthesisManager.swift
 //  VizAI Vision
 //
-//  Système de synthèse vocale OPTIMISÉ PROXIMITÉ
-//  Priorité absolue : DISTANCE < 1.5m = ALERTE IMMÉDIATE
-//  Distance mise à jour en temps réel au moment de l'annonce
+//  Système de synthèse vocale OPTIMISÉ avec OBJETS STATIQUES/DYNAMIQUES
+//  NOUVELLE RÈGLE : Objets dynamiques annoncés à distance critique + 2m
+//                   Objets statiques annoncés à distance critique exacte
 //
 
 import Foundation
@@ -14,12 +14,20 @@ import UIKit
 // MARK: - Enums et Structures
 
 enum DistanceZone {
-    case critical   // < distance critique
-    case safe       // >= distance critique
+    case farDynamic     // Pour objets dynamiques uniquement : critique + 2m
+    case critical       // < distance critique
+    case safe           // >= distance critique
     
-    static func from(distance: Float?, criticalDistance: Float) -> DistanceZone {
+    static func from(distance: Float?, criticalDistance: Float, isStatique: Bool) -> DistanceZone {
         guard let dist = distance else { return .safe }
-        return dist < criticalDistance ? .critical : .safe
+        
+        if dist < criticalDistance {
+            return .critical
+        } else if !isStatique && dist < (criticalDistance + 2.0) {
+            return .farDynamic
+        } else {
+            return .safe
+        }
     }
 }
 
@@ -57,13 +65,15 @@ struct VoiceMessage {
     let text: String
     let objectId: Int
     let objectType: String
+    let isStatique: Bool
     let timestamp: Date
     let expirationTime: Date
     
-    init(text: String, objectId: Int, objectType: String, timestamp: Date, lifetimeSeconds: TimeInterval = 3.0) {
+    init(text: String, objectId: Int, objectType: String, isStatique: Bool, timestamp: Date, lifetimeSeconds: TimeInterval = 3.0) {
         self.text = text
         self.objectId = objectId
         self.objectType = objectType.lowercased()
+        self.isStatique = isStatique
         self.timestamp = timestamp
         self.expirationTime = timestamp.addingTimeInterval(lifetimeSeconds)
     }
@@ -92,28 +102,30 @@ struct ObjectMovement {
 
 class VoiceSynthesisManager: NSObject, ObservableObject {
     
-    // MARK: - Configuration PROXIMITÉ
+    // MARK: - Configuration PROXIMITÉ avec OBJETS STATIQUES/DYNAMIQUES
     private var criticalDistance: Float = 2.0
-    private let minimumRepeatInterval: TimeInterval = 3.0  // Réduit pour proximité
+    private let minimumRepeatInterval: TimeInterval = 3.0
     private let movementUpdateInterval: TimeInterval = 2.0
-    private let globalAnnouncementCooldown: TimeInterval = 1.0  // Réduit pour réactivité
+    private let globalAnnouncementCooldown: TimeInterval = 1.0
     private var lastGlobalAnnouncement: Date = Date.distantPast
     
-    // NOUVEAU : Configuration priorité proximité
-    private let maxSimultaneousAnnouncements: Int = 3  // Réduit pour focus
-    private let messageLifetime: TimeInterval = 2.0  // Réduit pour rotation rapide
+    // NOUVEAU : Configuration priorité proximité avec distinction statique/dynamique
+    private let maxSimultaneousAnnouncements: Int = 3
+    private let messageLifetime: TimeInterval = 2.0
     private let proximityPriorityThreshold: Float = 1.5  // Seuil priorité absolue
+    private let dynamicObjectExtraDistance: Float = 2.0  // Distance supplémentaire pour objets dynamiques
     
     // Variables pour diversification (secondaire)
     private var lastAnnouncedTypes: [String: Date] = [:]
-    private let typeAnnouncementCooldown: TimeInterval = 3.0  // Réduit
+    private let typeAnnouncementCooldown: TimeInterval = 3.0
     
-    // Liste dynamique des objets dangereux
-    private var dangerousObjects: Set<String> = [
-        "person", "cyclist", "motorcyclist",
-        "car", "truck", "bus", "motorcycle", "bicycle",
-        "pole", "traffic_cone", "barrier", "temporary_barrier"
-    ]
+    // NOUVEAU : Listes séparées pour objets statiques et dynamiques
+    private var dangerousObjects: Set<String> = []
+    private var dynamicDangerousObjects: Set<String> = []  // Objets mobiles
+    private var statiquesDangerousObjects: Set<String> = []   // Objets statiques
+    
+    // NOUVEAU : Référence au gestionnaire de configuration des objets
+    private weak var objectConfigManager: ObjectConfigurationManager?
     
     // MARK: - État interne
     private var lastCriticalAnnouncements: [Int: Date] = [:]
@@ -215,12 +227,26 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         objectDistanceHistory.removeAll()
     }
     
+    // NOUVEAU : Mise à jour séparée pour objets dangereux et objets dynamiques
     func updateDangerousObjects(_ objects: Set<String>) {
         dangerousObjects = objects
         lastCriticalAnnouncements.removeAll()
         lastMovementAnnouncements.removeAll()
         objectDistanceHistory.removeAll()
         lastAnnouncedTypes.removeAll()
+    }
+    
+    func updateDynamicDangerousObjects(_ objects: Set<String>) {
+        dynamicDangerousObjects = objects
+        statiquesDangerousObjects = dangerousObjects.subtracting(dynamicDangerousObjects)
+        lastCriticalAnnouncements.removeAll()
+        lastMovementAnnouncements.removeAll()
+        objectDistanceHistory.removeAll()
+        lastAnnouncedTypes.removeAll()
+    }
+    
+    func setObjectConfigManager(_ manager: ObjectConfigurationManager) {
+        objectConfigManager = manager
     }
     
     private func setupAudioSession() {
@@ -281,6 +307,7 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             text: text,
             objectId: -999,
             objectType: "interaction",
+            isStatique: true,
             timestamp: Date()
         )
         
@@ -291,7 +318,7 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Interface principale OPTIMISÉE PROXIMITÉ
+    // MARK: - Interface principale OPTIMISÉE STATIQUE/DYNAMIQUE
     
     func processImportantObjects(_ importantObjects: [(object: TrackedObject, score: Float)]) {
         if isInterrupted {
@@ -313,8 +340,8 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             return
         }
         
-        // 3. NOUVELLE LOGIQUE : Détecter menaces par PROXIMITÉ d'abord
-        let proximityThreats = detectProximityThreats(importantObjects, currentTime: currentTime)
+        // 3. NOUVELLE LOGIQUE : Détecter menaces par PROXIMITÉ avec distinction statique/dynamique
+        let proximityThreats = detectProximityThreatsWithStaticDynamic(importantObjects, currentTime: currentTime)
         
         if !proximityThreats.isEmpty {
             announceProximityThreats(proximityThreats, currentTime: currentTime)
@@ -333,8 +360,8 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         }
     }
     
-    //Détection basée sur la PROXIMITÉ
-    private func detectProximityThreats(_ objects: [(object: TrackedObject, score: Float)], currentTime: Date) -> [TrackedObject] {
+    // NOUVEAU : Détection basée sur la PROXIMITÉ avec objets statiques/dynamiques
+    private func detectProximityThreatsWithStaticDynamic(_ objects: [(object: TrackedObject, score: Float)], currentTime: Date) -> [TrackedObject] {
         // Vérifier cooldown global
         let timeSinceLastGlobalAnnouncement = currentTime.timeIntervalSince(lastGlobalAnnouncement)
         if timeSinceLastGlobalAnnouncement < globalAnnouncementCooldown {
@@ -351,8 +378,9 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         // PRIORITÉ 1 : Objets TRÈS PROCHES (< 1.5m) = ALERTE IMMÉDIATE
         var veryCloseObjects: [TrackedObject] = []
         
-        // PRIORITÉ 2 : Objets proches (< distance critique)
-        var closeObjects: [TrackedObject] = []
+        // PRIORITÉ 2 : Objets dans leur zone d'alerte respective
+        var criticalObjects: [TrackedObject] = []       // Statiques à distance critique
+        var dynamicFarObjects: [TrackedObject] = []     // Dynamiques à distance critique + 2m
         
         // PRIORITÉ 3 : Nouveaux objets
         var newObjects: [TrackedObject] = []
@@ -362,18 +390,62 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         
         for (object, _) in objects {
             guard let distance = object.distance else { continue }
-            guard isDangerousObject(object) && distance < criticalDistance else { continue }
+            guard isDangerousObject(object) else { continue }
             
             let objectType = object.label.lowercased()
+            let isStatique = isStatiqueObject(object)
             let hasBeenAnnounced = lastCriticalAnnouncements[object.trackingNumber] != nil
             
-            // PRIORITÉ ABSOLUE : Distance < 1.5m
+            // 🐛 DEBUG: Log pour diagnostiquer
+            if objectType.contains("trash") || objectType == "trash_can" {
+                print("🗑️ DEBUG Poubelle:")
+                print("   - Distance: \(distance)m")
+                print("   - Distance critique: \(criticalDistance)m")
+                print("   - Est statique: \(isStatique)")
+                print("   - Est dangereuse: \(isDangerousObject(object))")
+                print("   - Label détecté: '\(object.label)'")
+                print("   - ObjectType: '\(objectType)'")
+            }
+            
+            // 🎯 RÈGLE STRICTE : Vérifier selon type d'objet D'ABORD
+            var shouldAnnounce = false
+            
+            if isStatique {
+                // Objet statique : SEULEMENT si distance < distance critique
+                shouldAnnounce = distance < criticalDistance
+                // 🐛 DEBUG
+                if objectType.contains("trash") || objectType == "trash_can" {
+                    print("   - Statique: shouldAnnounce = \(distance) < \(criticalDistance) = \(shouldAnnounce)")
+                }
+            } else {
+                // Objet dynamique : si distance < (distance critique + 2m)
+                shouldAnnounce = distance < (criticalDistance + dynamicObjectExtraDistance)
+                // 🐛 DEBUG
+                if objectType.contains("trash") || objectType == "trash_can" {
+                    print("   - Mobile: shouldAnnounce = \(distance) < \(criticalDistance + dynamicObjectExtraDistance) = \(shouldAnnounce)")
+                }
+            }
+            
+            // Si l'objet n'est pas dans sa zone d'alerte, l'ignorer complètement
+            guard shouldAnnounce else {
+                // 🐛 DEBUG
+                if objectType.contains("trash") || objectType == "trash_can" {
+                    print("   ✅ Poubelle IGNORÉE (hors zone)")
+                }
+                continue
+            }
+            
+            // PRIORITÉ ABSOLUE : Distance < 1.5m (pour objets qui passent déjà le filtre)
             if distance < proximityPriorityThreshold {
-                // Cooldown NORMAL même pour objets très proches (pas de spam)
+                // 🐛 DEBUG
+                if objectType.contains("trash") || objectType == "trash_can" {
+                    print("   ❌ Poubelle < 1.5m -> ALERTE PRIORITÉ ABSOLUE")
+                }
+                // Cooldown normal même pour objets très proches
                 if hasBeenAnnounced {
                     if let lastAnnouncement = lastCriticalAnnouncements[object.trackingNumber] {
                         let timeSince = currentTime.timeIntervalSince(lastAnnouncement)
-                        if timeSince < minimumRepeatInterval { // Cooldown normal
+                        if timeSince < minimumRepeatInterval {
                             continue
                         }
                     }
@@ -382,13 +454,19 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
                 continue
             }
             
-            // Objets proches mais pas critiques
+            // 🐛 DEBUG
+            if objectType.contains("trash") || objectType == "trash_can" {
+                print("   ❌ Poubelle SERA ANNONCÉE (dans zone)")
+            }
+            
+            // L'objet passe le filtre de distance, maintenant traiter selon le type d'annonce
             if !hasBeenAnnounced {
+                // Nouvel objet dans sa zone d'alerte
                 newObjects.append(object)
                 continue
             }
             
-            // Vérifier cooldowns normaux pour objets moins critiques
+            // Objet déjà annoncé - vérifier cooldowns pour re-annonce
             if let lastAnnouncement = lastCriticalAnnouncements[object.trackingNumber] {
                 let timeSinceLastAnnouncement = currentTime.timeIntervalSince(lastAnnouncement)
                 if timeSinceLastAnnouncement < minimumRepeatInterval {
@@ -404,7 +482,15 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
                 }
             }
             
-            // Vérifier mouvement d'approche
+            // Classer selon la zone pour la re-annonce
+            if distance < criticalDistance {
+                criticalObjects.append(object)
+            } else {
+                // Zone étendue pour objets dynamiques uniquement
+                dynamicFarObjects.append(object)
+            }
+            
+            // Vérifier mouvement d'approche pour objets déjà annoncés
             if let previousDistance = objectDistanceHistory[object.trackingNumber] {
                 let movement = ObjectMovement(previous: previousDistance, current: distance)
                 
@@ -418,24 +504,24 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
                         movementObjects.append(object)
                     }
                 }
-            } else {
-                closeObjects.append(object)
             }
         }
         
-        // NOUVEAU : Priorisation par PROXIMITÉ
-        return prioritizeByProximity(
+        // NOUVEAU : Priorisation par PROXIMITÉ avec distinction statique/dynamique
+        return prioritizeByProximityWithStaticDynamic(
             veryClose: veryCloseObjects,
-            close: closeObjects,
+            critical: criticalObjects,
+            dynamicFar: dynamicFarObjects,
             new: newObjects,
             movement: movementObjects
         )
     }
     
-    // NOUVEAU : Priorisation par proximité
-    private func prioritizeByProximity(
+    // NOUVEAU : Priorisation par proximité avec objets statiques/dynamiques
+    private func prioritizeByProximityWithStaticDynamic(
         veryClose: [TrackedObject],
-        close: [TrackedObject],
+        critical: [TrackedObject],
+        dynamicFar: [TrackedObject],
         new: [TrackedObject],
         movement: [TrackedObject]
     ) -> [TrackedObject] {
@@ -453,7 +539,7 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             return Array(result.prefix(remainingSlots))
         }
         
-        // PRIORITÉ 2 : Nouveaux objets proches, triés par distance
+        // PRIORITÉ 2 : Nouveaux objets (statiques + dynamiques), triés par distance
         let sortedNew = new.sorted { obj1, obj2 in
             guard let dist1 = obj1.distance, let dist2 = obj2.distance else { return false }
             return dist1 < dist2
@@ -466,24 +552,39 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
             return result
         }
         
-        // PRIORITÉ 3 : Objets proches sans doublons de type
+        // PRIORITÉ 3 : Objets critiques (statiques à distance critique)
         let usedTypes = Set(result.map { $0.label.lowercased() })
-        let filteredClose = close.filter { !usedTypes.contains($0.label.lowercased()) }
-        let sortedClose = filteredClose.sorted { obj1, obj2 in
+        let filteredCritical = critical.filter { !usedTypes.contains($0.label.lowercased()) }
+        let sortedCritical = filteredCritical.sorted { obj1, obj2 in
             guard let dist1 = obj1.distance, let dist2 = obj2.distance else { return false }
             return dist1 < dist2
         }
         
-        let closeSlotsUsed = min(sortedClose.count, remainingSlots - result.count)
-        result.append(contentsOf: Array(sortedClose.prefix(closeSlotsUsed)))
+        let criticalSlotsUsed = min(sortedCritical.count, remainingSlots - result.count)
+        result.append(contentsOf: Array(sortedCritical.prefix(criticalSlotsUsed)))
         
         if result.count >= remainingSlots {
             return result
         }
         
-        // PRIORITÉ 4 : Mouvements d'approche
+        // PRIORITÉ 4 : Objets dynamiques lointains (à distance critique + 2m)
         let finalUsedTypes = Set(result.map { $0.label.lowercased() })
-        let filteredMovement = movement.filter { !finalUsedTypes.contains($0.label.lowercased()) }
+        let filteredDynamicFar = dynamicFar.filter { !finalUsedTypes.contains($0.label.lowercased()) }
+        let sortedDynamicFar = filteredDynamicFar.sorted { obj1, obj2 in
+            guard let dist1 = obj1.distance, let dist2 = obj2.distance else { return false }
+            return dist1 < dist2
+        }
+        
+        let dynamicFarSlotsUsed = min(sortedDynamicFar.count, remainingSlots - result.count)
+        result.append(contentsOf: Array(sortedDynamicFar.prefix(dynamicFarSlotsUsed)))
+        
+        if result.count >= remainingSlots {
+            return result
+        }
+        
+        // PRIORITÉ 5 : Mouvements d'approche
+        let movementUsedTypes = Set(result.map { $0.label.lowercased() })
+        let filteredMovement = movement.filter { !movementUsedTypes.contains($0.label.lowercased()) }
         let sortedMovement = filteredMovement.sorted { obj1, obj2 in
             guard let dist1 = obj1.distance, let dist2 = obj2.distance else { return false }
             return dist1 < dist2
@@ -500,14 +601,28 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         return dangerousObjects.contains(label)
     }
     
-    // NOUVEAU : Annonces optimisées proximité
+    // NOUVEAU : Détermine si un objet est statique
+    private func isStatiqueObject(_ object: TrackedObject) -> Bool {
+        // Utiliser le gestionnaire de configuration si disponible
+        if let configManager = objectConfigManager {
+            return configManager.isStatique(object.label)
+        }
+        
+        // Fallback : utiliser la liste des objets dynamiques
+        let label = object.label.lowercased()
+        return !dynamicDangerousObjects.contains(label)
+    }
+    
+    // NOUVEAU : Annonces optimisées avec distinction statique/dynamique
     private func announceProximityThreats(_ threats: [TrackedObject], currentTime: Date) {
         for threat in threats {
-            let message = createProximityMessage(threat, currentTime: currentTime)
+            let isStatique = isStatiqueObject(threat)
+            let message = createProximityMessageWithStatiquesDynamic(threat, currentTime: currentTime, isStatique: isStatique)
             let voiceMessage = VoiceMessage(
                 text: message,
                 objectId: threat.trackingNumber,
                 objectType: threat.label,
+                isStatique: isStatique,
                 timestamp: currentTime,
                 lifetimeSeconds: messageLifetime
             )
@@ -525,8 +640,8 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         processMessageQueue()
     }
     
-    // NOUVEAU : Messages optimisés pour proximité
-    private func createProximityMessage(_ object: TrackedObject, currentTime: Date) -> String {
+    // NOUVEAU : Messages optimisés pour proximité avec contexte statique/dynamique
+    private func createProximityMessageWithStatiquesDynamic(_ object: TrackedObject, currentTime: Date, isStatique: Bool) -> String {
         let frenchLabel = translateLabel(object.label)
         let direction = Direction.from(boundingBox: object.lastRect)
         let objectId = object.trackingNumber
@@ -542,13 +657,25 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
                     return "ATTENTION ! \(frenchLabel) \(direction.rawValue) à \(distanceText) !"
                 } else if distance > 3.0 {
                     // "au loin" si > 3m
-                    return "\(frenchLabel) \(direction.rawValue) au loin"
+                    if isStatique {
+                        return "\(frenchLabel) \(direction.rawValue) au loin"
+                    } else {
+                        return "\(frenchLabel) mobile \(direction.rawValue) au loin"
+                    }
                 } else {
-                    // Pas de distance si 1.5m - 3m
-                    return "\(frenchLabel) \(direction.rawValue)"
+                    // Pas de distance si 1.5m - 3m, mais indiquer si mobile
+                    if isStatique {
+                        return "\(frenchLabel) \(direction.rawValue)"
+                    } else {
+                        return "\(frenchLabel) mobile \(direction.rawValue)"
+                    }
                 }
             } else {
-                return "\(frenchLabel) \(direction.rawValue)"
+                if isStatique {
+                    return "\(frenchLabel) \(direction.rawValue)"
+                } else {
+                    return "\(frenchLabel) mobile \(direction.rawValue)"
+                }
             }
         } else {
             // Objet déjà connu - mouvement d'approche
@@ -570,7 +697,12 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
                 }
             }
             
-            return "\(frenchLabel) \(direction.rawValue)"
+            // Re-annonce normale
+            if isStatique {
+                return "\(frenchLabel) \(direction.rawValue)"
+            } else {
+                return "\(frenchLabel) mobile \(direction.rawValue)"
+            }
         }
     }
     
@@ -641,9 +773,11 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
                 let distanceText = formatProximityDistance(currentDistance)
                 return "ATTENTION ! \(frenchLabel) \(direction.rawValue) à \(distanceText) !"
             } else if currentDistance > 3.0 {
-                return "ATTENTION ! \(frenchLabel) \(direction.rawValue) au loin !"
+                let statiqueText = message.isStatique ? "" : "mobile "
+                return "ATTENTION ! \(frenchLabel) \(statiqueText)\(direction.rawValue) au loin !"
             } else {
-                return "ATTENTION ! \(frenchLabel) \(direction.rawValue) !"
+                let statiqueText = message.isStatique ? "" : "mobile "
+                return "ATTENTION ! \(frenchLabel) \(statiqueText)\(direction.rawValue) !"
             }
         } else if message.text.contains("se rapproche") {
             if currentDistance < 1.5 {
@@ -659,9 +793,11 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
                 let distanceText = formatProximityDistance(currentDistance)
                 return "\(frenchLabel) \(direction.rawValue) à \(distanceText)"
             } else if currentDistance > 3.0 {
-                return "\(frenchLabel) \(direction.rawValue) au loin"
+                let statiqueText = message.isStatique ? "" : "mobile "
+                return "\(frenchLabel) \(statiqueText)\(direction.rawValue) au loin"
             } else {
-                return "\(frenchLabel) \(direction.rawValue)"
+                let statiqueText = message.isStatique ? "" : "mobile "
+                return "\(frenchLabel) \(statiqueText)\(direction.rawValue)"
             }
         }
     }
@@ -748,34 +884,39 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         lastInterruptionTime = Date.distantPast
     }
     
-    // Statistiques
+    // Statistiques mises à jour
     func getStats() -> String {
         let interruptionStatus = isInterrupted ? "⏸️ Interrompu" : "🚨 Surveillance active"
         let queueStatus = messageQueue.count >= maxSimultaneousAnnouncements ? "🚫 PLEINE" : "✅ OK"
         
-        let queueTypes = messageQueue.map { $0.objectType }.joined(separator: ", ")
+        let queueTypes = messageQueue.map { "\($0.objectType)(\($0.isStatique ? "S" : "D"))" }.joined(separator: ", ")
         let typeCooldowns = lastAnnouncedTypes.map { type, date in
             let timeSince = Date().timeIntervalSince(date)
             return "\(type)(\(String(format: "%.1f", timeSince))s)"
         }.joined(separator: ", ")
         
         return """
-        🗣️ VoiceSynthesisManager - OPTIMISÉ PROXIMITÉ:
+        🗣️ VoiceSynthesisManager - OBJETS STATIQUES/DYNAMIQUES:
            - État: \(isCurrentlySpeaking ? "En cours" : "Silencieux")
            - Mode: \(interruptionStatus)
            - Distance critique: \(String(format: "%.2f", criticalDistance))m
+           - Distance dynamique: \(String(format: "%.2f", criticalDistance + dynamicObjectExtraDistance))m
            - Seuil priorité: \(String(format: "%.1f", proximityPriorityThreshold))m
            - Messages en attente: \(messageQueue.count)/\(maxSimultaneousAnnouncements) \(queueStatus)
            - Types en queue: [\(queueTypes)]
            - Objets surveillés: \(lastCriticalAnnouncements.count)
+           - Objets dangereux: \(dangerousObjects.count)
+           - Objets dynamiques: \(dynamicDangerousObjects.count)
+           - Objets statiques: \(statiquesDangerousObjects.count)
         
-        🎯 Fonctionnalités PROXIMITÉ:
-           - PRIORITÉ: Distance < \(String(format: "%.1f", proximityPriorityThreshold))m (pas de spam)
+        🎯 Nouvelles Règles STATIQUES/DYNAMIQUES:
+           - Objets statiques → Alerte à \(String(format: "%.2f", criticalDistance))m
+           - Objets dynamiques → Alerte à \(String(format: "%.2f", criticalDistance + dynamicObjectExtraDistance))m  
+           - Priorité: Distance < \(String(format: "%.1f", proximityPriorityThreshold))m (tous objets)
            - Distance précise: < \(String(format: "%.1f", proximityPriorityThreshold))m
            - "au loin": > 3.0m
+           - Indication "mobile" pour objets dynamiques
            - Mise à jour TEMPS RÉEL: distance + direction
-           - Cooldown uniforme: \(String(format: "%.1f", minimumRepeatInterval))s pour tous
-           - Tri par distance croissante dans chaque priorité
         """
     }
 }
