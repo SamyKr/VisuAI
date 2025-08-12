@@ -311,18 +311,40 @@ struct QuestionnaireView: View {
     }
 }
 
-// Gestionnaire de synthèse vocale - INCHANGÉ
+// Gestionnaire de synthèse vocale - CORRIGÉ POUR LE BON HAUT-PARLEUR
 class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     private let synthesizer = AVSpeechSynthesizer()
     
     override init() {
         super.init()
         synthesizer.delegate = self
+        configureAudioSession()
+    }
+    
+    // 🔧 NOUVEAU: Configuration de la session audio
+    private func configureAudioSession() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            
+            // Configurer la catégorie pour la lecture audio
+            try audioSession.setCategory(.playback, mode: .default, options: [.defaultToSpeaker])
+            
+            // Activer la session
+            try audioSession.setActive(true)
+            
+            
+            
+        } catch {
+            
+        }
     }
     
     func speak(_ text: String) {
         // Arrêter toute synthèse en cours
         synthesizer.stopSpeaking(at: .immediate)
+        
+        // 🔧 NOUVEAU: S'assurer que l'audio sort sur le bon haut-parleur
+        forceAudioToSpeaker()
         
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "fr-FR")
@@ -330,6 +352,19 @@ class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         utterance.volume = 1.0
         
         synthesizer.speak(utterance)
+    }
+    
+    // 🔧 NOUVEAU: Force l'audio sur le haut-parleur principal
+    private func forceAudioToSpeaker() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            
+            // Force la sortie sur le haut-parleur (pas l'earpiece)
+            try audioSession.overrideOutputAudioPort(.speaker)
+            
+        } catch {
+            print("❌ Erreur override audio: \(error.localizedDescription)")
+        }
     }
     
     func stop() {

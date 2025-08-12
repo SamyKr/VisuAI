@@ -1,9 +1,10 @@
 //
-//  VoiceSynthesisManager.swift (Version dangers critiques uniquement)
-//  test
+//  VoiceSynthesisManager.swift
+//  VizAI Vision
 //
-//  Modified by Assistant - Annonces vocales uniquement pour dangers immédiats
-//  Système de synthèse vocale pour piétons aveugles - MODE CRITIQUE SEULEMENT
+//  Système de synthèse vocale OPTIMISÉ PROXIMITÉ
+//  Priorité absolue : DISTANCE < 1.5m = ALERTE IMMÉDIATE
+//  Distance mise à jour en temps réel au moment de l'annonce
 //
 
 import Foundation
@@ -13,8 +14,8 @@ import UIKit
 // MARK: - Enums et Structures
 
 enum DistanceZone {
-    case critical   // < distance critique - SEULE ZONE QUI DÉCLENCHE UNE ANNONCE
-    case safe       // >= distance critique - Aucune annonce
+    case critical   // < distance critique
+    case safe       // >= distance critique
     
     static func from(distance: Float?, criticalDistance: Float) -> DistanceZone {
         guard let dist = distance else { return .safe }
@@ -51,10 +52,25 @@ enum Direction: String, CaseIterable {
     }
 }
 
+// Structure de message simplifiée
 struct VoiceMessage {
     let text: String
     let objectId: Int
+    let objectType: String
     let timestamp: Date
+    let expirationTime: Date
+    
+    init(text: String, objectId: Int, objectType: String, timestamp: Date, lifetimeSeconds: TimeInterval = 3.0) {
+        self.text = text
+        self.objectId = objectId
+        self.objectType = objectType.lowercased()
+        self.timestamp = timestamp
+        self.expirationTime = timestamp.addingTimeInterval(lifetimeSeconds)
+    }
+    
+    func isExpired(at currentTime: Date) -> Bool {
+        return currentTime > expirationTime
+    }
 }
 
 struct ObjectMovement {
@@ -66,7 +82,7 @@ struct ObjectMovement {
     init(previous: Float, current: Float) {
         self.previousDistance = previous
         self.currentDistance = current
-        let threshold: Float = 0.3 // Seuil pour considérer un mouvement significatif
+        let threshold: Float = 0.3
         self.isApproaching = (previous - current) > threshold
         self.isMovingAway = (current - previous) > threshold
     }
@@ -76,28 +92,37 @@ struct ObjectMovement {
 
 class VoiceSynthesisManager: NSObject, ObservableObject {
     
-    // MARK: - Configuration
+    // MARK: - Configuration PROXIMITÉ
     private var criticalDistance: Float = 2.0
-    private let minimumRepeatInterval: TimeInterval = 3.0  // Interval plus long pour éviter spam
-    private let movementUpdateInterval: TimeInterval = 2.0 // Pour les annonces de mouvement
-    
-    // 🎯 NOUVEAU: Contrôle du rythme global des annonces
-    private let globalAnnouncementCooldown: TimeInterval = 2.5  // Délai minimum entre TOUTES les annonces
+    private let minimumRepeatInterval: TimeInterval = 3.0  // Réduit pour proximité
+    private let movementUpdateInterval: TimeInterval = 2.0
+    private let globalAnnouncementCooldown: TimeInterval = 1.0  // Réduit pour réactivité
     private var lastGlobalAnnouncement: Date = Date.distantPast
-    private let maxSimultaneousAnnouncements: Int = 2  // Max 2 annonces dans la queue
     
-    // 🎯 NOUVEAU: Liste dynamique des objets dangereux
+    // NOUVEAU : Configuration priorité proximité
+    private let maxSimultaneousAnnouncements: Int = 3  // Réduit pour focus
+    private let messageLifetime: TimeInterval = 2.0  // Réduit pour rotation rapide
+    private let proximityPriorityThreshold: Float = 1.5  // Seuil priorité absolue
+    
+    // Variables pour diversification (secondaire)
+    private var lastAnnouncedTypes: [String: Date] = [:]
+    private let typeAnnouncementCooldown: TimeInterval = 3.0  // Réduit
+    
+    // Liste dynamique des objets dangereux
     private var dangerousObjects: Set<String> = [
         "person", "cyclist", "motorcyclist",
         "car", "truck", "bus", "motorcycle", "bicycle",
-        "pole", "traffic cone", "barrier", "temporary barrier"
+        "pole", "traffic_cone", "barrier", "temporary_barrier"
     ]
     
     // MARK: - État interne
     private var lastCriticalAnnouncements: [Int: Date] = [:]
-    private var lastMovementAnnouncements: [Int: Date] = [:] // Séparé pour les mouvements
-    private var objectDistanceHistory: [Int: Float] = [:] // Pour tracker le mouvement
+    private var lastMovementAnnouncements: [Int: Date] = [:]
+    private var objectDistanceHistory: [Int: Float] = [:]
     private var messageQueue: [VoiceMessage] = []
+    
+    // NOUVEAU : Référence aux objets actuels pour distance temps réel
+    private var currentTrackedObjects: [Int: TrackedObject] = [:]
     
     // MARK: - Support pour interaction vocale
     @Published var isInterrupted = false
@@ -111,7 +136,6 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
     
     // MARK: - Dictionnaire de traduction
     private let translationDictionary: [String: String] = [
-        // Véhicules et usagers
         "person": "personne",
         "cyclist": "cycliste",
         "motorcyclist": "motocycliste",
@@ -124,8 +148,6 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         "vehicle_group": "groupe de véhicules",
         "rail_vehicle": "véhicule ferroviaire",
         "boat": "bateau",
-        
-        // Infrastructure routière
         "sidewalk": "trottoir",
         "road": "route",
         "crosswalk": "passage piéton",
@@ -135,8 +157,6 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         "rail_track": "voie ferrée",
         "service_lane": "voie de service",
         "curb": "bordure",
-        
-        // Barrières et obstacles
         "wall": "mur",
         "fence": "clôture",
         "guard_rail": "glissière de sécurité",
@@ -144,14 +164,10 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         "barrier_other": "autre barrière",
         "barrier": "barrière",
         "pole": "poteau",
-        
-        // Signalisation et équipements
         "traffic_light": "feu de circulation",
         "traffic_sign": "panneau de signalisation",
         "street_light": "lampadaire",
         "traffic_cone": "cône",
-        
-        // Mobilier urbain
         "bench": "banc",
         "trash_can": "poubelle",
         "fire_hydrant": "bouche d'incendie",
@@ -159,15 +175,11 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         "parking_meter": "parcmètre",
         "bike_rack": "support à vélos",
         "phone_booth": "cabine téléphonique",
-        
-        // Éléments de voirie
         "pothole": "nid-de-poule",
         "manhole": "plaque d'égout",
         "catch_basin": "regard d'égout",
         "water_valve": "vanne d'eau",
         "junction_box": "boîtier de jonction",
-        
-        // Structures et environnement
         "building": "bâtiment",
         "bridge": "pont",
         "tunnel": "tunnel",
@@ -198,27 +210,17 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
     
     func updateCriticalDistance(_ distance: Float) {
         criticalDistance = distance
-        lastCriticalAnnouncements.removeAll() // Appliquer immédiatement
+        lastCriticalAnnouncements.removeAll()
         lastMovementAnnouncements.removeAll()
         objectDistanceHistory.removeAll()
     }
     
-    // 🎯 NOUVEAU: Mise à jour des objets dangereux
     func updateDangerousObjects(_ objects: Set<String>) {
-        let oldObjects = dangerousObjects
         dangerousObjects = objects
-        
-        // 🐛 DEBUG: Vérifier la mise à jour
-        print("🔧 DEBUG VoiceSynthesis - Objets dangereux mis à jour:")
-        print("   - Anciens: \(Array(oldObjects).sorted())")
-        print("   - Nouveaux: \(Array(dangerousObjects).sorted())")
-        print("   - 'car' présent: \(dangerousObjects.contains("car"))")
-        
-        // Vider les caches pour appliquer immédiatement
         lastCriticalAnnouncements.removeAll()
         lastMovementAnnouncements.removeAll()
         objectDistanceHistory.removeAll()
-        print("   - Caches vidés pour effet immédiat")
+        lastAnnouncedTypes.removeAll()
     }
     
     private func setupAudioSession() {
@@ -278,6 +280,7 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         let interactionMessage = VoiceMessage(
             text: text,
             objectId: -999,
+            objectType: "interaction",
             timestamp: Date()
         )
         
@@ -288,182 +291,306 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Interface principale
+    // MARK: - Interface principale OPTIMISÉE PROXIMITÉ
     
     func processImportantObjects(_ importantObjects: [(object: TrackedObject, score: Float)]) {
         if isInterrupted {
             return
         }
         
-        // Arrêt immédiat si plus rien à détecter
+        let currentTime = Date()
+        
+        // NOUVEAU : Mettre à jour les références d'objets pour distance temps réel
+        updateCurrentObjectReferences(importantObjects)
+        
+        // 1. Nettoyer la queue
+        cleanupMessageQueue(currentObjects: importantObjects, currentTime: currentTime)
+        
+        // 2. Arrêt si plus rien
         guard !importantObjects.isEmpty else {
-            stopSpeaking() // Arrêt immédiat au lieu d'attendre
-            lastCriticalAnnouncements.removeAll()
-            lastMovementAnnouncements.removeAll()
-            objectDistanceHistory.removeAll()
+            stopSpeaking()
+            clearAllAnnouncements()
             return
         }
         
-        let currentTime = Date()
-        let criticalThreats = detectCriticalThreats(importantObjects, currentTime: currentTime)
+        // 3. NOUVELLE LOGIQUE : Détecter menaces par PROXIMITÉ d'abord
+        let proximityThreats = detectProximityThreats(importantObjects, currentTime: currentTime)
         
-        if !criticalThreats.isEmpty {
-            announceCriticalThreats(criticalThreats, currentTime: currentTime)
+        if !proximityThreats.isEmpty {
+            announceProximityThreats(proximityThreats, currentTime: currentTime)
         }
         
-        // Mettre à jour l'historique des distances
+        // 4. Mettre à jour l'historique
         updateDistanceHistory(importantObjects)
         cleanupOldAnnouncements(currentObjects: importantObjects)
     }
     
-    // MARK: - Détection des menaces critiques
+    // Mettre à jour les références d'objets
+    private func updateCurrentObjectReferences(_ objects: [(object: TrackedObject, score: Float)]) {
+        currentTrackedObjects.removeAll()
+        for (object, _) in objects {
+            currentTrackedObjects[object.trackingNumber] = object
+        }
+    }
     
-    private func detectCriticalThreats(_ objects: [(object: TrackedObject, score: Float)], currentTime: Date) -> [TrackedObject] {
-        // 🎯 NOUVEAU: Vérifier le cooldown global
+    //Détection basée sur la PROXIMITÉ
+    private func detectProximityThreats(_ objects: [(object: TrackedObject, score: Float)], currentTime: Date) -> [TrackedObject] {
+        // Vérifier cooldown global
         let timeSinceLastGlobalAnnouncement = currentTime.timeIntervalSince(lastGlobalAnnouncement)
         if timeSinceLastGlobalAnnouncement < globalAnnouncementCooldown {
-            return [] // Trop tôt pour une nouvelle annonce
+            return []
         }
         
-        // 🎯 NOUVEAU: Vérifier si la queue n'est pas déjà pleine
+        // Vérifier si queue pleine
         if messageQueue.count >= maxSimultaneousAnnouncements {
-            return [] // Queue pleine, attendre qu'elle se vide
+            return []
         }
         
-        var newThreats: [TrackedObject] = []
-        var movementThreats: [TrackedObject] = []
+        var candidates: [TrackedObject] = []
+        
+        // PRIORITÉ 1 : Objets TRÈS PROCHES (< 1.5m) = ALERTE IMMÉDIATE
+        var veryCloseObjects: [TrackedObject] = []
+        
+        // PRIORITÉ 2 : Objets proches (< distance critique)
+        var closeObjects: [TrackedObject] = []
+        
+        // PRIORITÉ 3 : Nouveaux objets
+        var newObjects: [TrackedObject] = []
+        
+        // PRIORITÉ 4 : Mouvements d'approche
+        var movementObjects: [TrackedObject] = []
         
         for (object, _) in objects {
             guard let distance = object.distance else { continue }
+            guard isDangerousObject(object) && distance < criticalDistance else { continue }
             
-            // 1. Vérifier si l'objet est à distance critique
-            let zone = DistanceZone.from(distance: distance, criticalDistance: criticalDistance)
-            guard zone == .critical && isDangerousObject(object) else { continue }
+            let objectType = object.label.lowercased()
+            let hasBeenAnnounced = lastCriticalAnnouncements[object.trackingNumber] != nil
             
-            let objectId = object.trackingNumber
-            let hasBeenAnnounced = lastCriticalAnnouncements[objectId] != nil
-            
-            // 2. Objets jamais annoncés = priorité absolue
-            if !hasBeenAnnounced {
-                newThreats.append(object)
+            // PRIORITÉ ABSOLUE : Distance < 1.5m
+            if distance < proximityPriorityThreshold {
+                // Cooldown NORMAL même pour objets très proches (pas de spam)
+                if hasBeenAnnounced {
+                    if let lastAnnouncement = lastCriticalAnnouncements[object.trackingNumber] {
+                        let timeSince = currentTime.timeIntervalSince(lastAnnouncement)
+                        if timeSince < minimumRepeatInterval { // Cooldown normal
+                            continue
+                        }
+                    }
+                }
+                veryCloseObjects.append(object)
                 continue
             }
             
-            // 3. Pour objets déjà annoncés, vérifier le timing
-            if let lastAnnouncement = lastCriticalAnnouncements[objectId] {
+            // Objets proches mais pas critiques
+            if !hasBeenAnnounced {
+                newObjects.append(object)
+                continue
+            }
+            
+            // Vérifier cooldowns normaux pour objets moins critiques
+            if let lastAnnouncement = lastCriticalAnnouncements[object.trackingNumber] {
                 let timeSinceLastAnnouncement = currentTime.timeIntervalSince(lastAnnouncement)
                 if timeSinceLastAnnouncement < minimumRepeatInterval {
-                    continue // Trop récent
+                    continue
                 }
             }
             
-            // 4. Vérifier le mouvement pour objets déjà annoncés
-            if let previousDistance = objectDistanceHistory[objectId] {
+            // Vérifier cooldown par type (diversification secondaire)
+            if let lastTypeAnnouncement = lastAnnouncedTypes[objectType] {
+                let timeSinceType = currentTime.timeIntervalSince(lastTypeAnnouncement)
+                if timeSinceType < typeAnnouncementCooldown {
+                    continue
+                }
+            }
+            
+            // Vérifier mouvement d'approche
+            if let previousDistance = objectDistanceHistory[object.trackingNumber] {
                 let movement = ObjectMovement(previous: previousDistance, current: distance)
                 
-                // Annoncer mouvement seulement si significatif et pas trop récent
-                if (movement.isApproaching || movement.isMovingAway) {
-                    if let lastMovement = lastMovementAnnouncements[objectId] {
+                if movement.isApproaching {
+                    if let lastMovement = lastMovementAnnouncements[object.trackingNumber] {
                         let timeSinceMovement = currentTime.timeIntervalSince(lastMovement)
                         if timeSinceMovement >= movementUpdateInterval {
-                            movementThreats.append(object)
+                            movementObjects.append(object)
                         }
                     } else {
-                        movementThreats.append(object)
+                        movementObjects.append(object)
                     }
                 }
+            } else {
+                closeObjects.append(object)
             }
         }
         
-        // Prioriser: nouveaux objets en premier, puis mouvements
-        var result = newThreats
-        if result.isEmpty && !movementThreats.isEmpty {
-            result = Array(movementThreats.prefix(1)) // 🎯 RÉDUIT: Max 1 mouvement à la fois
+        // NOUVEAU : Priorisation par PROXIMITÉ
+        return prioritizeByProximity(
+            veryClose: veryCloseObjects,
+            close: closeObjects,
+            new: newObjects,
+            movement: movementObjects
+        )
+    }
+    
+    // NOUVEAU : Priorisation par proximité
+    private func prioritizeByProximity(
+        veryClose: [TrackedObject],
+        close: [TrackedObject],
+        new: [TrackedObject],
+        movement: [TrackedObject]
+    ) -> [TrackedObject] {
+        var result: [TrackedObject] = []
+        let remainingSlots = maxSimultaneousAnnouncements - messageQueue.count
+        
+        // PRIORITÉ 1 : Objets TRÈS proches (< 1.5m) - TOUS annoncés
+        let sortedVeryClose = veryClose.sorted { obj1, obj2 in
+            guard let dist1 = obj1.distance, let dist2 = obj2.distance else { return false }
+            return dist1 < dist2
+        }
+        result.append(contentsOf: sortedVeryClose)
+        
+        if result.count >= remainingSlots {
+            return Array(result.prefix(remainingSlots))
         }
         
-        // 🎯 NOUVEAU: Limiter à 1 annonce à la fois pour éviter l'enchaînement
-        if !result.isEmpty {
-            result = Array(result.prefix(1))
+        // PRIORITÉ 2 : Nouveaux objets proches, triés par distance
+        let sortedNew = new.sorted { obj1, obj2 in
+            guard let dist1 = obj1.distance, let dist2 = obj2.distance else { return false }
+            return dist1 < dist2
         }
+        
+        let newSlotsUsed = min(sortedNew.count, remainingSlots - result.count)
+        result.append(contentsOf: Array(sortedNew.prefix(newSlotsUsed)))
+        
+        if result.count >= remainingSlots {
+            return result
+        }
+        
+        // PRIORITÉ 3 : Objets proches sans doublons de type
+        let usedTypes = Set(result.map { $0.label.lowercased() })
+        let filteredClose = close.filter { !usedTypes.contains($0.label.lowercased()) }
+        let sortedClose = filteredClose.sorted { obj1, obj2 in
+            guard let dist1 = obj1.distance, let dist2 = obj2.distance else { return false }
+            return dist1 < dist2
+        }
+        
+        let closeSlotsUsed = min(sortedClose.count, remainingSlots - result.count)
+        result.append(contentsOf: Array(sortedClose.prefix(closeSlotsUsed)))
+        
+        if result.count >= remainingSlots {
+            return result
+        }
+        
+        // PRIORITÉ 4 : Mouvements d'approche
+        let finalUsedTypes = Set(result.map { $0.label.lowercased() })
+        let filteredMovement = movement.filter { !finalUsedTypes.contains($0.label.lowercased()) }
+        let sortedMovement = filteredMovement.sorted { obj1, obj2 in
+            guard let dist1 = obj1.distance, let dist2 = obj2.distance else { return false }
+            return dist1 < dist2
+        }
+        
+        let movementSlotsUsed = min(sortedMovement.count, remainingSlots - result.count)
+        result.append(contentsOf: Array(sortedMovement.prefix(movementSlotsUsed)))
         
         return result
     }
     
     private func isDangerousObject(_ object: TrackedObject) -> Bool {
         let label = object.label.lowercased()
-        let isDangerous = dangerousObjects.contains(label)
-        
-        // 🐛 DEBUG: Afficher chaque vérification
-        print("🔍 Vérification objet: '\(label)' → \(isDangerous ? "DANGEREUX" : "SAFE")")
-        if label == "car" {
-            print("   ⚠️ ATTENTION: Objet 'car' détecté - Liste actuelle: \(Array(dangerousObjects).sorted())")
-        }
-        
-        return isDangerous
+        return dangerousObjects.contains(label)
     }
     
-    private func announceCriticalThreats(_ threats: [TrackedObject], currentTime: Date) {
+    // NOUVEAU : Annonces optimisées proximité
+    private func announceProximityThreats(_ threats: [TrackedObject], currentTime: Date) {
         for threat in threats {
-            let message = createCriticalThreatMessage(threat, currentTime: currentTime)
+            let message = createProximityMessage(threat, currentTime: currentTime)
             let voiceMessage = VoiceMessage(
                 text: message,
                 objectId: threat.trackingNumber,
-                timestamp: currentTime
+                objectType: threat.label,
+                timestamp: currentTime,
+                lifetimeSeconds: messageLifetime
             )
             
             messageQueue.append(voiceMessage)
             lastCriticalAnnouncements[threat.trackingNumber] = currentTime
+            lastAnnouncedTypes[threat.label.lowercased()] = currentTime
             
-            // Marquer aussi comme annonce de mouvement si c'était un mouvement
             if objectDistanceHistory[threat.trackingNumber] != nil {
                 lastMovementAnnouncements[threat.trackingNumber] = currentTime
             }
         }
         
-        // 🎯 NOUVEAU: Mettre à jour le timestamp global
         lastGlobalAnnouncement = currentTime
-        
         processMessageQueue()
     }
     
-    private func createCriticalThreatMessage(_ object: TrackedObject, currentTime: Date) -> String {
+    // NOUVEAU : Messages optimisés pour proximité
+    private func createProximityMessage(_ object: TrackedObject, currentTime: Date) -> String {
         let frenchLabel = translateLabel(object.label)
         let direction = Direction.from(boundingBox: object.lastRect)
         let objectId = object.trackingNumber
         
-        // Vérifier si c'est un nouvel objet ou un mouvement
         let isNewObject = lastCriticalAnnouncements[objectId] == nil
         
         if isNewObject {
-            // Nouveau danger - message avec distance si proche
+            // Nouveau danger
             if let distance = object.distance {
-                if distance < 1.0 {
-                    return "DANGER ! \(frenchLabel) très proche \(direction.rawValue) !"
-                } else if distance < 1.5 {
-                    let roundedDistance = Int(distance.rounded())
-                    let meterText = roundedDistance == 1 ? "mètre" : "mètres"
-                    return "ATTENTION ! \(frenchLabel) \(direction.rawValue) à \(roundedDistance) \(meterText) !"
+                if distance < 1.5 {
+                    // Distance précise si < 1.5m + ATTENTION
+                    let distanceText = formatProximityDistance(distance)
+                    return "ATTENTION ! \(frenchLabel) \(direction.rawValue) à \(distanceText) !"
+                } else if distance > 3.0 {
+                    // "au loin" si > 3m
+                    return "\(frenchLabel) \(direction.rawValue) au loin"
                 } else {
-                    return "ATTENTION ! \(frenchLabel) \(direction.rawValue) !"
+                    // Pas de distance si 1.5m - 3m
+                    return "\(frenchLabel) \(direction.rawValue)"
                 }
             } else {
-                return "ATTENTION ! \(frenchLabel) \(direction.rawValue) !"
+                return "\(frenchLabel) \(direction.rawValue)"
             }
         } else {
-            // Objet déjà connu - vérifier le mouvement
+            // Objet déjà connu - mouvement d'approche
             if let previousDistance = objectDistanceHistory[objectId],
                let currentDistance = object.distance {
                 let movement = ObjectMovement(previous: previousDistance, current: currentDistance)
                 
                 if movement.isApproaching {
-                    return "\(frenchLabel) se rapproche \(direction.rawValue) !"
-                } else if movement.isMovingAway {
-                    return "\(frenchLabel) s'éloigne \(direction.rawValue)"
+                    if currentDistance < 1.5 {
+                        // Distance précise si < 1.5m
+                        let distanceText = formatProximityDistance(currentDistance)
+                        return "\(frenchLabel) se rapproche \(direction.rawValue) à \(distanceText) !"
+                    } else if currentDistance > 3.0 {
+                        // "au loin" si > 3m
+                        return "\(frenchLabel) se rapproche \(direction.rawValue) au loin !"
+                    } else {
+                        return "\(frenchLabel) se rapproche \(direction.rawValue) !"
+                    }
                 }
             }
             
-            // Fallback si pas de mouvement détecté
-            return "\(frenchLabel) toujours \(direction.rawValue)"
+            return "\(frenchLabel) \(direction.rawValue)"
+        }
+    }
+    
+    // NOUVEAU : Formatage distance seulement < 1.5m
+    private func formatProximityDistance(_ distance: Float) -> String {
+        if distance < 0.5 {
+            return "moins de 50 centimètres"
+        } else if distance < 1.0 {
+            let roundedDistance = round(distance * 10) / 10
+            return "\(String(format: "%.1f", roundedDistance)) mètre"
+        } else {
+            // 1.0m - 1.5m
+            let roundedDistance = round(distance * 2) / 2
+            let meterText = roundedDistance == 1.0 ? "mètre" : "mètres"
+            
+            if roundedDistance == floor(roundedDistance) {
+                return "\(Int(roundedDistance)) \(meterText)"
+            } else {
+                return "\(String(format: "%.1f", roundedDistance)) \(meterText)"
+            }
         }
     }
     
@@ -471,23 +598,88 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         return translationDictionary[englishLabel.lowercased()] ?? englishLabel
     }
     
-    // MARK: - Gestion de la queue et synthèse
+    // MARK: - Gestion de la queue avec distance temps réel
     
+    // NOUVEAU : Processus avec mise à jour distance temps réel
     private func processMessageQueue() {
         guard !isInterrupted && !isCurrentlySpeaking && !messageQueue.isEmpty else {
             return
         }
         
+        let currentTime = Date()
+        
+        // Nettoyer messages expirés
+        if messageQueue.first?.isExpired(at: currentTime) == true {
+            messageQueue.removeFirst()
+            processMessageQueue()
+            return
+        }
+        
         let message = messageQueue.removeFirst()
-        speakInternal(message.text)
+        
+        // NOUVEAU : Mettre à jour le message avec la distance actuelle
+        let finalText = updateMessageWithCurrentDistance(message)
+        
+        speakInternal(finalText)
+    }
+    
+    // NOUVEAU : Mise à jour distance ET direction en temps réel
+    private func updateMessageWithCurrentDistance(_ message: VoiceMessage) -> String {
+        // Trouver l'objet correspondant dans la liste actuelle
+        guard let currentObject = currentTrackedObjects[message.objectId],
+              let currentDistance = currentObject.distance else {
+            // Pas d'objet actuel, utiliser message sans distance ni direction mise à jour
+            return removeDistanceFromMessage(message.text)
+        }
+        
+        // Recalculer le message avec distance ET direction actuelles
+        let frenchLabel = translateLabel(currentObject.label)
+        let direction = Direction.from(boundingBox: currentObject.lastRect) // Direction temps réel
+        
+        if message.text.contains("ATTENTION") {
+            if currentDistance < 1.5 {
+                let distanceText = formatProximityDistance(currentDistance)
+                return "ATTENTION ! \(frenchLabel) \(direction.rawValue) à \(distanceText) !"
+            } else if currentDistance > 3.0 {
+                return "ATTENTION ! \(frenchLabel) \(direction.rawValue) au loin !"
+            } else {
+                return "ATTENTION ! \(frenchLabel) \(direction.rawValue) !"
+            }
+        } else if message.text.contains("se rapproche") {
+            if currentDistance < 1.5 {
+                let distanceText = formatProximityDistance(currentDistance)
+                return "\(frenchLabel) se rapproche \(direction.rawValue) à \(distanceText) !"
+            } else if currentDistance > 3.0 {
+                return "\(frenchLabel) se rapproche \(direction.rawValue) au loin !"
+            } else {
+                return "\(frenchLabel) se rapproche \(direction.rawValue) !"
+            }
+        } else {
+            if currentDistance < 1.5 {
+                let distanceText = formatProximityDistance(currentDistance)
+                return "\(frenchLabel) \(direction.rawValue) à \(distanceText)"
+            } else if currentDistance > 3.0 {
+                return "\(frenchLabel) \(direction.rawValue) au loin"
+            } else {
+                return "\(frenchLabel) \(direction.rawValue)"
+            }
+        }
+    }
+    
+    // NOUVEAU : Supprimer distance d'un message si plus pertinente
+    private func removeDistanceFromMessage(_ originalText: String) -> String {
+        // Supprimer les parties "à X mètre(s)" du message
+        let distancePattern = " à [^!]*"
+        let result = originalText.replacingOccurrences(of: distancePattern, with: "", options: .regularExpression)
+        return result.replacingOccurrences(of: "  ", with: " ") // Nettoyer doubles espaces
     }
     
     private func speakInternal(_ text: String) {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "fr-FR")
-        utterance.rate = 0.65
+        utterance.rate = 0.55
         utterance.volume = 1.0
-        utterance.pitchMultiplier = 1.1
+        utterance.pitchMultiplier = 1
         
         isCurrentlySpeaking = true
         speechSynthesizer.speak(utterance)
@@ -509,6 +701,16 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
     
     // MARK: - Nettoyage et maintenance
     
+    private func cleanupMessageQueue(currentObjects: [(object: TrackedObject, score: Float)], currentTime: Date) {
+        let currentObjectIds = Set(currentObjects.map { $0.object.trackingNumber })
+        
+        messageQueue = messageQueue.filter { message in
+            let isNotExpired = !message.isExpired(at: currentTime)
+            let objectStillExists = currentObjectIds.contains(message.objectId) || message.objectId == -999
+            return isNotExpired && objectStillExists
+        }
+    }
+    
     private func updateDistanceHistory(_ objects: [(object: TrackedObject, score: Float)]) {
         for (object, _) in objects {
             if let distance = object.distance {
@@ -520,7 +722,6 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
     private func cleanupOldAnnouncements(currentObjects: [(object: TrackedObject, score: Float)]) {
         let currentObjectIds = Set(currentObjects.map { $0.object.trackingNumber })
         
-        // Nettoyer les objets qui ne sont plus détectés
         let absentObjectIds = Set(lastCriticalAnnouncements.keys).subtracting(currentObjectIds)
         for objectId in absentObjectIds {
             lastCriticalAnnouncements.removeValue(forKey: objectId)
@@ -529,13 +730,17 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         }
     }
     
-    func clearAllState() {
-        stopSpeaking()
+    private func clearAllAnnouncements() {
         lastCriticalAnnouncements.removeAll()
         lastMovementAnnouncements.removeAll()
         objectDistanceHistory.removeAll()
-        
-        // 🎯 NOUVEAU: Réinitialiser le cooldown global
+        currentTrackedObjects.removeAll()
+    }
+    
+    func clearAllState() {
+        stopSpeaking()
+        clearAllAnnouncements()
+        lastAnnouncedTypes.removeAll()
         lastGlobalAnnouncement = Date.distantPast
         
         isInterrupted = false
@@ -543,43 +748,42 @@ class VoiceSynthesisManager: NSObject, ObservableObject {
         lastInterruptionTime = Date.distantPast
     }
     
+    // Statistiques
     func getStats() -> String {
-        let interruptionStatus = isInterrupted ? "⏸️ Interrompu (\(interruptionReason))" : "🚨 Surveillance active"
+        let interruptionStatus = isInterrupted ? "⏸️ Interrompu" : "🚨 Surveillance active"
         let queueStatus = messageQueue.count >= maxSimultaneousAnnouncements ? "🚫 PLEINE" : "✅ OK"
         
+        let queueTypes = messageQueue.map { $0.objectType }.joined(separator: ", ")
+        let typeCooldowns = lastAnnouncedTypes.map { type, date in
+            let timeSince = Date().timeIntervalSince(date)
+            return "\(type)(\(String(format: "%.1f", timeSince))s)"
+        }.joined(separator: ", ")
+        
         return """
-        🗣️ VoiceSynthesisManager - MODE CRITIQUE OPTIMISÉ:
+        🗣️ VoiceSynthesisManager - OPTIMISÉ PROXIMITÉ:
            - État: \(isCurrentlySpeaking ? "En cours" : "Silencieux")
            - Mode: \(interruptionStatus)
            - Distance critique: \(String(format: "%.2f", criticalDistance))m
+           - Seuil priorité: \(String(format: "%.1f", proximityPriorityThreshold))m
            - Messages en attente: \(messageQueue.count)/\(maxSimultaneousAnnouncements) \(queueStatus)
+           - Types en queue: [\(queueTypes)]
            - Objets surveillés: \(lastCriticalAnnouncements.count)
-           - Mouvements trackés: \(objectDistanceHistory.count)
-           - Objets dangereux configurés: \(dangerousObjects.count)
-           - Cooldown global: \(String(format: "%.1f", globalAnnouncementCooldown))s
         
-        🚨 Fonctionnalités optimisées:
-           - Arrêt immédiat si plus de détection
-           - Messages variés avec distance et mouvement
-           - Priorisation nouveaux objets > mouvements
-           - Anti-spam intelligent (3s objets, 2s mouvements)
-           - Cooldown global de \(String(format: "%.1f", globalAnnouncementCooldown))s entre annonces
-           - Max \(maxSimultaneousAnnouncements) annonces simultanées
-           - 1 seule annonce à la fois pour éviter l'enchaînement
+        🎯 Fonctionnalités PROXIMITÉ:
+           - PRIORITÉ: Distance < \(String(format: "%.1f", proximityPriorityThreshold))m (pas de spam)
+           - Distance précise: < \(String(format: "%.1f", proximityPriorityThreshold))m
+           - "au loin": > 3.0m
+           - Mise à jour TEMPS RÉEL: distance + direction
+           - Cooldown uniforme: \(String(format: "%.1f", minimumRepeatInterval))s pour tous
+           - Tri par distance croissante dans chaque priorité
         """
-    }
-    
-    // 🎯 NOUVEAU: Méthode pour ajuster le rythme des annonces
-    func setAnnouncementRate(cooldown: TimeInterval, maxQueue: Int = 2) {
-        // Cette méthode pourrait être appelée depuis les paramètres si vous voulez un contrôle utilisateur
-        // Pour l'instant, les valeurs sont hardcodées mais facilement modifiables
     }
 }
 
 extension VoiceSynthesisManager: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         isCurrentlySpeaking = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.processMessageQueue()
         }
     }

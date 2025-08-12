@@ -1,24 +1,53 @@
 //
-//  CameraManager.swift (Version avec LiDAR + Tracking + Objets Dangereux)
-//  test
+//  CameraManager.swift
+//  VizAI Vision
 //
-//  Created by Samy 📍 on 18/06/2025.
-//  Updated with LiDAR integration - 19/06/2025
-//  Updated with Object Tracking - 20/06/2025
-//  Updated with new class management system - 08/07/2025
-//  Updated with dangerous objects system - 12/07/2025
+//  RÔLE CENTRAL DANS L'ARCHITECTURE:
+//  CameraManager est le CŒUR du système de détection - il orchestre tous les composants:
 //
+//  📱 CAPTURE VIDÉO:
+//  - Gestion complète AVCaptureSession (caméra + LiDAR si disponible)
+//  - Configuration optimisée pour détection IA (HD 1920x1080, 60fps)
+//  - Synchronisation flux vidéo/profondeur pour mesures de distance précises
+//
+//  🤖 INTELLIGENCE ARTIFICIELLE:
+//  - Interface principale avec ObjectDetectionManager (YOLOv11)
+//  - Orchestration détection + tracking + scoring d'importance
+//  - Gestion liste objets actifs/ignorés et classes dangereuses
+//
+//  🗣️ SYSTÈME VOCAL ET HAPTIQUE:
+//  - Connection directe avec VoiceSynthesisManager pour alertes critiques
+//  - Contrôle HapticManager pour vibrations de proximité
+//  - Transmission distance critique et objets dangereux
+//
+//  📏 LiDAR ET DISTANCES:
+//  - Activation/désactivation capteur profondeur
+//  - Intégration LiDARManager pour mesures précises
+//  - Calculs de proximité pour alertes sécurité
+//
+//  🎯 INTERFACE UTILISATEUR:
+//  - Delegate pattern pour communication avec DetectionView
+//  - Méthodes publiques pour tous les contrôles UI
+//  - Gestion permissions et états de session
+//
+//  FLUX DE DONNÉES:
+//  Caméra → CameraManager → ObjectDetection → Tracking → VoiceSynthesis/Haptic → UI
 
 import AVFoundation
 import Vision
 import SwiftUI
 
-// Protocole mis à jour pour le tracking coloré avec LiDAR
+// MARK: - Protocol de Communication avec UI
 protocol CameraManagerDelegate {
+    /// Transmet les détections enrichies avec tracking et distance à l'interface
+    /// - Parameter detections: Array des objets détectés avec infos complètes
     func didDetectObjects(_ detections: [(rect: CGRect, label: String, confidence: Float, distance: Float?, trackingInfo: (id: Int, color: UIColor, opacity: Double))])
 }
 
+// MARK: - Gestionnaire Principal Caméra et Détection
 class CameraManager: NSObject, ObservableObject {
+    
+    // MARK: - États Publics Observables
     @Published var isRunning = false
     @Published var hasPermission = false
     @Published var currentFPS: Double = 0.0
@@ -27,6 +56,7 @@ class CameraManager: NSObject, ObservableObject {
     
     var delegate: CameraManagerDelegate?
     
+    // MARK: - Composants Système Caméra
     private let captureSession = AVCaptureSession()
     private let videoDataOutput = AVCaptureVideoDataOutput()
     private let depthDataOutput = AVCaptureDepthDataOutput()
@@ -34,32 +64,32 @@ class CameraManager: NSObject, ObservableObject {
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private var previewLayer: AVCaptureVideoPreviewLayer?
     
+    // MARK: - Gestionnaires Spécialisés
     private let objectDetectionManager = ObjectDetectionManager()
     private let lidarManager = LiDARManager()
-    private let hapticManager = HapticManager()  // ← Manager pour les vibrations
+    private let hapticManager = HapticManager()
     private var voiceSynthesisManager: VoiceSynthesisManager?
     
-    // Configuration des skip frames
-    private var skipFrameCount = 1
-    private var frameCounter = 0
+    // MARK: - Configuration Performance
+    private var skipFrameCount = 1 // Nombre de frames à ignorer (performance)
+    private var frameCounter = 0   // Compteur pour skip frames
     
-    // Variables pour la synchronisation des données
+    // MARK: - Variables de Synchronisation
     private var lastImageBuffer: CVPixelBuffer?
     private var lastDepthData: AVDepthData?
     private var imageSize: CGSize = .zero
     
+    // MARK: - Initialisation
     override init() {
         super.init()
         
-        // Vérifier la disponibilité du LiDAR
         lidarAvailable = lidarManager.isAvailable()
-        
         setupCaptureSession()
-        
-        print("🎥 CameraManager initialisé avec tracking")
-        print("📏 LiDAR disponible: \(lidarAvailable ? "✅" : "❌")")
     }
     
+    // MARK: - Gestion Permissions
+    
+    /// Demande l'autorisation d'accès à la caméra
     func requestPermission() {
         AVCaptureDevice.requestAccess(for: .video) { granted in
             DispatchQueue.main.async {
@@ -68,6 +98,9 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     
+    // MARK: - Contrôle Session Caméra
+    
+    /// Démarre la session de capture vidéo
     func startSession() {
         guard hasPermission else {
             requestPermission()
@@ -84,6 +117,7 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     
+    /// Arrête la session de capture vidéo
     func stopSession() {
         sessionQueue.async {
             if self.captureSession.isRunning {
@@ -95,6 +129,8 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     
+    /// Fournit la couche de prévisualisation pour l'affichage UI
+    /// - Returns: AVCaptureVideoPreviewLayer configurée
     func getPreviewLayer() -> AVCaptureVideoPreviewLayer {
         if previewLayer == nil {
             previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
@@ -103,39 +139,43 @@ class CameraManager: NSObject, ObservableObject {
         return previewLayer!
     }
     
-    // MARK: -- Voice Synthesis Management
+    // MARK: - Interface VoiceSynthesisManager
+    
+    /// Connecte le gestionnaire de synthèse vocale pour les alertes
+    /// - Parameter manager: Instance VoiceSynthesisManager
     func setVoiceSynthesisManager(_ manager: VoiceSynthesisManager) {
         self.voiceSynthesisManager = manager
     }
     
+    /// Met à jour la distance critique pour les alertes vocales
+    /// - Parameter distance: Distance en mètres (0.5-10m)
     func updateCriticalDistance(_ distance: Float) {
-        // Transmettre au VoiceSynthesisManager
         voiceSynthesisManager?.updateCriticalDistance(distance)
     }
     
-    // 🎯 NOUVEAU: Gestion des objets dangereux
+    /// Met à jour la liste des objets considérés comme dangereux
+    /// - Parameter dangerousObjects: Set des types d'objets dangereux
     func updateDangerousObjects(_ dangerousObjects: Set<String>) {
-        // 🐛 DEBUG: Vérifier l'appel
-        print("🎥 CameraManager.updateDangerousObjects appelée:")
-        print("   - Objets reçus: \(Array(dangerousObjects).sorted())")
-        print("   - VoiceSynthesisManager connecté: \(voiceSynthesisManager != nil)")
-        
-        // Transmettre au VoiceSynthesisManager
         voiceSynthesisManager?.updateDangerousObjects(dangerousObjects)
-        print("   - Transmission vers VoiceSynthesisManager effectuée")
     }
     
-    // MARK: - Tracking Controls
+    // MARK: - Contrôles Tracking
+    
+    /// Réinitialise le système de tracking des objets
     func resetTracking() {
         objectDetectionManager.resetTracking()
-        print("🔄 Tracking réinitialisé")
     }
     
+    /// Obtient les statistiques détaillées du tracking
+    /// - Returns: String formaté avec les stats
     func getTrackingStats() -> String {
         return objectDetectionManager.getTrackingStats()
     }
     
-    // MARK: - Haptic Controls
+    // MARK: - Contrôles Vibrations Haptiques
+    
+    /// Active/désactive les alertes de proximité par vibration
+    /// - Parameter enabled: État des alertes
     func enableProximityAlerts(_ enabled: Bool) {
         hapticManager.enableProximityAlerts(enabled)
     }
@@ -144,6 +184,8 @@ class CameraManager: NSObject, ObservableObject {
         return hapticManager.isProximityAlertsEnabled()
     }
     
+    /// Configure la distance de danger pour vibrations
+    /// - Parameter distance: Distance en mètres
     func setDangerDistance(_ distance: Float) {
         hapticManager.setDangerDistance(distance)
     }
@@ -152,6 +194,8 @@ class CameraManager: NSObject, ObservableObject {
         return hapticManager.getDangerDistance()
     }
     
+    /// Configure la distance d'avertissement pour vibrations
+    /// - Parameter distance: Distance en mètres
     func setWarningDistance(_ distance: Float) {
         hapticManager.setWarningDistance(distance)
     }
@@ -160,6 +204,10 @@ class CameraManager: NSObject, ObservableObject {
         return hapticManager.getWarningDistance()
     }
     
+    /// Définit la plage d'intensité des vibrations
+    /// - Parameters:
+    ///   - min: Intensité minimale (0.0-1.0)
+    ///   - max: Intensité maximale (0.0-1.0)
     func setIntensityRange(min: Float, max: Float) {
         hapticManager.setIntensityRange(min: min, max: max)
     }
@@ -168,6 +216,8 @@ class CameraManager: NSObject, ObservableObject {
         return hapticManager.getIntensityRange()
     }
     
+    /// Active/désactive les vibrations graduées selon la distance
+    /// - Parameter enabled: État des vibrations graduées
     func enableGraduatedVibrations(_ enabled: Bool) {
         hapticManager.enableGraduatedVibrations(enabled)
     }
@@ -176,6 +226,8 @@ class CameraManager: NSObject, ObservableObject {
         return hapticManager.isGraduatedVibrationsEnabled()
     }
     
+    /// Active/désactive la fréquence graduée des vibrations
+    /// - Parameter enabled: État de la fréquence graduée
     func enableGraduatedFrequency(_ enabled: Bool) {
         hapticManager.enableGraduatedFrequency(enabled)
     }
@@ -184,6 +236,10 @@ class CameraManager: NSObject, ObservableObject {
         return hapticManager.isGraduatedFrequencyEnabled()
     }
     
+    /// Configure la plage de fréquence des vibrations
+    /// - Parameters:
+    ///   - minCooldown: Délai minimum entre vibrations (proche)
+    ///   - maxCooldown: Délai maximum entre vibrations (loin)
     func setFrequencyRange(minCooldown: TimeInterval, maxCooldown: TimeInterval) {
         hapticManager.setFrequencyRange(minCooldown: minCooldown, maxCooldown: maxCooldown)
     }
@@ -192,47 +248,56 @@ class CameraManager: NSObject, ObservableObject {
         return hapticManager.getFrequencyRange()
     }
     
+    // MARK: - Feedback Haptique Manuel
+    
+    /// Joue un feedback de succès
     func playSuccessFeedback() {
         hapticManager.playSuccessFeedback()
     }
     
+    /// Joue un feedback de sélection
     func playSelectionFeedback() {
         hapticManager.playSelectionFeedback()
     }
     
+    /// Test vibration de danger avec intensité personnalisée
+    /// - Parameter intensity: Intensité (0.0-1.0), défaut 1.0
     func testDangerVibration(intensity: Float = 1.0) {
         hapticManager.testDangerVibration(customIntensity: intensity)
     }
     
+    /// Test vibration d'avertissement avec intensité personnalisée
+    /// - Parameter intensity: Intensité (0.0-1.0), défaut 0.7
     func testWarningVibration(intensity: Float = 0.7) {
         hapticManager.testWarningVibration(customIntensity: intensity)
     }
     
-    // MARK: - LiDAR Controls
+    // MARK: - Contrôles LiDAR
+    
+    /// Active le capteur LiDAR si disponible
+    /// - Returns: true si activation réussie
     func enableLiDAR() -> Bool {
-        guard lidarAvailable else {
-            print("❌ LiDAR non disponible")
-            return false
-        }
+        guard lidarAvailable else { return false }
         
         let success = lidarManager.enableDepthCapture()
         if success {
             DispatchQueue.main.async {
                 self.isLiDAREnabled = true
             }
-            print("✅ LiDAR activé")
         }
         return success
     }
     
+    /// Désactive le capteur LiDAR
     func disableLiDAR() {
         lidarManager.disableDepthCapture()
         DispatchQueue.main.async {
             self.isLiDAREnabled = false
         }
-        print("⏹️ LiDAR désactivé")
     }
     
+    /// Bascule l'état du LiDAR
+    /// - Returns: Nouvel état (true = activé)
     func toggleLiDAR() -> Bool {
         if isLiDAREnabled {
             disableLiDAR()
@@ -242,100 +307,105 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Important Objects Ranking
+    // MARK: - Objets Importants et Statistiques
+    
+    /// Obtient les objets les plus importants selon leur score
+    /// - Parameter maxCount: Nombre maximum d'objets à retourner
+    /// - Returns: Array des objets avec leurs scores
     func getTopImportantObjects(maxCount: Int = 5) -> [(object: TrackedObject, score: Float)] {
         return objectDetectionManager.getTopImportantObjects(maxCount: maxCount)
     }
     
-    func getImportanceStats() -> String {
-        return objectDetectionManager.getImportanceStats()
-    }
+   
     
-    func getPerformanceStats() -> String {
-        var stats = objectDetectionManager.getPerformanceStats()
-        
-        if lidarAvailable {
-            stats += "\n\n" + lidarManager.getLiDARStats()
-        }
-        
-        stats += "\n\n" + hapticManager.getHapticStats()
-        
-        return stats
-    }
-    
+    /// Remet à zéro toutes les statistiques
     func resetPerformanceStats() {
         objectDetectionManager.resetStats()
         lidarManager.resetStats()
         hapticManager.resetStats()
     }
     
-    // MARK: - Configuration
+    // MARK: - Configuration Performance
+    
+    /// Configure le nombre de frames à ignorer pour optimiser les performances
+    /// - Parameter count: Nombre de frames à skip (0 = aucun skip)
     func setSkipFrames(_ count: Int) {
         skipFrameCount = max(0, count)
-        print("⚙️ Skip frames défini à: \(skipFrameCount)")
     }
     
     func getSkipFrames() -> Int {
         return skipFrameCount
     }
     
-    // MODIFIÉ: Nouveau système de gestion des classes
+    // MARK: - Gestion Classes d'Objets
+    
+    /// Définit les classes d'objets à détecter (autres seront ignorées)
+    /// - Parameter classes: Set des noms de classes à activer
     func setEnabledClasses(_ classes: Set<String>) {
         objectDetectionManager.setEnabledClasses(classes)
-        print("✅ Classes activées mises à jour: \(classes.count) classes")
     }
     
+    /// Ajoute une classe à la liste des objets ignorés
+    /// - Parameter className: Nom de la classe à ignorer
     func addIgnoredClass(_ className: String) {
         objectDetectionManager.addIgnoredClass(className)
     }
     
+    /// Retire une classe de la liste des objets ignorés
+    /// - Parameter className: Nom de la classe à réactiver
     func removeIgnoredClass(_ className: String) {
         objectDetectionManager.removeIgnoredClass(className)
     }
     
+    /// Obtient la liste des classes actuellement ignorées
+    /// - Returns: Array des noms de classes ignorées
     func getIgnoredClasses() -> [String] {
         return objectDetectionManager.getIgnoredClasses()
     }
     
+    /// Vide la liste des classes ignorées (réactive tout)
     func clearIgnoredClasses() {
         objectDetectionManager.clearIgnoredClasses()
     }
     
-    // AJOUTÉ: Accès aux classes du modèle
+    /// Obtient toutes les classes disponibles dans le modèle
+    /// - Returns: Array des 49 classes supportées
     func getAvailableClasses() -> [String] {
         return objectDetectionManager.getAvailableClasses()
     }
     
-    // AJOUTÉ: Accès statique aux classes du modèle
+    /// Accès statique aux classes du modèle YOLOv11
+    /// - Returns: Array des 49 classes du modèle
     static func getAllModelClasses() -> [String] {
         return ObjectDetectionManager.getAllModelClasses()
     }
     
-    // MARK: - Setup
+    // MARK: - Configuration Session Caméra
+    
+    /// Configure la session de capture avec support LiDAR optimal
     private func setupCaptureSession() {
         sessionQueue.async {
             self.captureSession.beginConfiguration()
             
-            // Configuration de la session pour de meilleures performances
+            // Configuration haute résolution pour meilleure détection IA
             if self.captureSession.canSetSessionPreset(.hd1920x1080) {
                 self.captureSession.sessionPreset = .hd1920x1080
             }
             
-            // Ajouter l'entrée vidéo avec support LiDAR si disponible
+            // Configuration entrée vidéo avec support LiDAR
             guard let videoDevice = self.getBestCameraDevice(),
                   let videoDeviceInput = try? AVCaptureDeviceInput(device: videoDevice),
                   self.captureSession.canAddInput(videoDeviceInput) else {
-                print("❌ Impossible de configurer l'entrée vidéo")
                 return
             }
             
             self.captureSession.addInput(videoDeviceInput)
             
-            // Stocker la taille de l'image pour les calculs de distance
+            // Stockage taille image pour calculs de distance
             let dimensions = CMVideoFormatDescriptionGetDimensions(videoDevice.activeFormat.formatDescription)
             self.imageSize = CGSize(width: Int(dimensions.width), height: Int(dimensions.height))
             
-            // Configurer la sortie vidéo
+            // Configuration sortie vidéo optimisée
             if self.captureSession.canAddOutput(self.videoDataOutput) {
                 self.captureSession.addOutput(self.videoDataOutput)
                 
@@ -343,55 +413,53 @@ class CameraManager: NSObject, ObservableObject {
                     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
                 ]
                 
-                // Configuration pour de meilleures performances
                 self.videoDataOutput.alwaysDiscardsLateVideoFrames = true
             }
             
-            // Configurer la sortie de profondeur si LiDAR disponible
+            // Configuration sortie profondeur LiDAR si disponible
             if self.lidarAvailable && self.captureSession.canAddOutput(self.depthDataOutput) {
                 self.captureSession.addOutput(self.depthDataOutput)
                 
-                // Connecter la sortie de profondeur à l'entrée vidéo
                 if let connection = self.depthDataOutput.connection(with: .depthData) {
                     connection.isEnabled = true
                 }
                 
-                // Configuration du format de profondeur
+                // Configuration format profondeur optimal
                 if let depthFormat = self.getBestDepthFormat(for: videoDevice) {
                     try? videoDevice.lockForConfiguration()
                     videoDevice.activeDepthDataFormat = depthFormat
                     videoDevice.unlockForConfiguration()
-                    print("✅ Format de profondeur configuré: \(depthFormat)")
                 }
-                
-                print("✅ Sortie de profondeur LiDAR configurée")
             }
             
-            // Configurer le synchronizer pour coordonner les données
+            // Configuration synchronizer pour coordination vidéo/profondeur
             self.configureSynchronizer()
             
             self.captureSession.commitConfiguration()
-            print("✅ Session de capture configurée avec LiDAR: \(self.lidarAvailable)")
         }
     }
     
+    /// Sélectionne la meilleure caméra disponible (LiDAR en priorité)
+    /// - Returns: AVCaptureDevice optimal pour détection
     private func getBestCameraDevice() -> AVCaptureDevice? {
-        // Essayer d'abord la caméra avec LiDAR
+        // Priorité à la caméra avec LiDAR si disponible
         if lidarAvailable {
             if let lidarDevice = AVCaptureDevice.default(.builtInLiDARDepthCamera, for: .video, position: .back) {
-                print("✅ Utilisation de la caméra LiDAR")
                 return lidarDevice
             }
         }
         
-        // Sinon, utiliser la caméra standard
+        // Sinon caméra standard arrière
         return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
     }
     
+    /// Sélectionne le meilleur format de profondeur pour performances optimales
+    /// - Parameter device: Device caméra
+    /// - Returns: Format de profondeur optimal (640x480 prioritaire)
     private func getBestDepthFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
         let depthFormats = device.activeFormat.supportedDepthDataFormats
         
-        // Chercher un format 640x480 pour de bonnes performances
+        // Recherche format 640x480 pour équilibre qualité/performance
         let preferredDepthFormat = depthFormats.first { format in
             let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
             return dimensions.width == 640 && dimensions.height == 480
@@ -400,52 +468,54 @@ class CameraManager: NSObject, ObservableObject {
         return preferredDepthFormat ?? depthFormats.first
     }
     
+    /// Configure le synchronizer pour coordination vidéo/profondeur
     private func configureSynchronizer() {
-        // Créer le synchronizer APRÈS que les outputs soient ajoutés à la session
         if lidarAvailable {
+            // Mode LiDAR: synchronisation vidéo + profondeur
             outputSynchronizer = AVCaptureDataOutputSynchronizer(dataOutputs: [videoDataOutput, depthDataOutput])
             outputSynchronizer?.setDelegate(self, queue: DispatchQueue(label: "sync.processing.queue"))
-            print("✅ Synchronizer configuré avec LiDAR")
         } else {
-            // Mode sans LiDAR - utiliser seulement le delegate vidéo
+            // Mode standard: vidéo seule
             videoDataOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "video.processing.queue"))
-            print("✅ Mode vidéo seule configuré (pas de LiDAR)")
         }
     }
 }
 
-// MARK: - AVCaptureDataOutputSynchronizerDelegate (avec LiDAR)
+// MARK: - Delegate Synchronization (Mode LiDAR)
 extension CameraManager: AVCaptureDataOutputSynchronizerDelegate {
+    
+    /// Traite les données synchronisées vidéo + profondeur LiDAR
+    /// - Parameters:
+    ///   - synchronizer: Synchronizer source
+    ///   - synchronizedDataCollection: Données coordonnées vidéo/profondeur
     func dataOutputSynchronizer(_ synchronizer: AVCaptureDataOutputSynchronizer,
                                didOutput synchronizedDataCollection: AVCaptureSynchronizedDataCollection) {
         
-        // Système de skip frames
+        // Système skip frames pour optimisation performance
         frameCounter += 1
         guard frameCounter % (skipFrameCount + 1) == 0 else { return }
         
-        // Récupérer les données vidéo
+        // Extraction données vidéo
         guard let syncedVideoData = synchronizedDataCollection.synchronizedData(for: videoDataOutput) as? AVCaptureSynchronizedSampleBufferData,
               !syncedVideoData.sampleBufferWasDropped,
               let pixelBuffer = CMSampleBufferGetImageBuffer(syncedVideoData.sampleBuffer) else {
             return
         }
         
-        // Récupérer les données de profondeur si disponibles
+        // Extraction données profondeur si LiDAR actif
         var depthData: AVDepthData?
         if lidarAvailable && isLiDAREnabled,
            let syncedDepthData = synchronizedDataCollection.synchronizedData(for: depthDataOutput) as? AVCaptureSynchronizedDepthData,
            !syncedDepthData.depthDataWasDropped {
             depthData = syncedDepthData.depthData
-            
-            // Traiter les données de profondeur
             lidarManager.processDepthData(syncedDepthData.depthData)
         }
         
-        // Stocker pour utilisation dans les calculs de distance
+        // Stockage pour calculs de distance
         lastImageBuffer = pixelBuffer
         lastDepthData = depthData
         
-        // Effectuer la détection d'objets avec données LiDAR et tracking
+        // Lancement détection IA avec données LiDAR et tracking
         objectDetectionManager.detectObjectsWithLiDAR(
             in: pixelBuffer,
             depthData: depthData,
@@ -455,42 +525,42 @@ extension CameraManager: AVCaptureDataOutputSynchronizerDelegate {
             DispatchQueue.main.async {
                 self?.currentFPS = 1000.0 / inferenceTime
                 
-                // Vérifier la proximité et déclencher les vibrations si nécessaire
-                // Convertir les détections au format attendu par hapticManager (sans tracking info)
+                // Vérification proximité pour vibrations
                 let proximityDetections = detections.map {
                     (rect: $0.rect, label: $0.label, confidence: $0.confidence, distance: $0.distance)
                 }
                 self?.hapticManager.checkProximityAndAlert(detections: proximityDetections)
                 
+                // Transmission à l'interface utilisateur
                 self?.delegate?.didDetectObjects(detections)
             }
         }
     }
 }
 
-// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate (sans LiDAR)
+// MARK: - Delegate Video (Mode Standard)
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+    
+    /// Traite les données vidéo seules (sans LiDAR)
+    /// - Parameters:
+    ///   - output: Source de sortie
+    ///   - sampleBuffer: Buffer vidéo
+    ///   - connection: Connection source
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         
         // Ne traiter que si pas de synchronizer (mode sans LiDAR)
         guard outputSynchronizer == nil else { return }
         
-        // Système de skip frames configurable
+        // Système skip frames
         frameCounter += 1
         guard frameCounter % (skipFrameCount + 1) == 0 else { return }
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         
-        // Effectuer la détection d'objets sans LiDAR mais avec tracking
+        // Détection IA sans LiDAR mais avec tracking
         objectDetectionManager.detectObjects(in: pixelBuffer) { [weak self] detections, inferenceTime in
             DispatchQueue.main.async {
-                // Mettre à jour le FPS pour l'affichage
                 self?.currentFPS = 1000.0 / inferenceTime
-                
-                // Pas de vérification de proximité sans LiDAR (distances non disponibles)
-                
-                // Notifier le délégué des détections avec tracking
-                // Note: detections ont déjà distance: nil car pas de LiDAR
                 self?.delegate?.didDetectObjects(detections)
             }
         }

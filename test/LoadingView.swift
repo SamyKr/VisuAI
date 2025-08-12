@@ -1,7 +1,26 @@
+//
+//  LoadingView.swift
+//  VizAI Vision
+//
+//  RÔLE DANS L'ARCHITECTURE:
+//  - Écran de chargement initial avec animation sophistiquée du logo
+//  - Gestion de la transition vers questionnaire (première utilisation) ou app principale
+//  - Vérification automatique du statut de configuration utilisateur
+//  - Animation avec match move pour transition fluide vers ContentView
+//
+//  FONCTIONNALITÉS:
+//  - Animation logo en 8 phases (6 secondes) avec effets visuels avancés
+//  - Particules flottantes et effets de glow
+//  - Clignement périodique de l'œil du logo
+//  - Détection automatique profil utilisateur complet/incomplet
+//  - Transition intelligente selon le statut utilisateur
+
 import SwiftUI
 
-// Extension pour supporter les couleurs hexadécimales
+// MARK: - Extension Color pour couleurs hexadécimales
 extension Color {
+    /// Initialise une couleur à partir d'une chaîne hexadécimale
+    /// - Parameter hex: Code couleur hex (3, 6 ou 8 caractères)
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var int: UInt64 = 0
@@ -28,9 +47,11 @@ extension Color {
     }
 }
 
+// MARK: - Vue de Chargement Principale
 struct LoadingView: View {
-    let logoNamespace: Namespace.ID // Paramètre pour le match move
+    let logoNamespace: Namespace.ID // Namespace pour animation match move vers ContentView
     
+    // États d'animation du logo et des effets
     @State private var eyeOpacity: Double = 0
     @State private var eyeScale: CGFloat = 0.3
     @State private var logoScale: CGFloat = 0.5
@@ -46,13 +67,13 @@ struct LoadingView: View {
     
     var body: some View {
         ZStack {
-            // Fond animé avec pulsation
+            // Fond dégradé animé avec pulsation
             LinearGradient(
                 gradient: Gradient(colors: [
-                    Color(hex: "0a1f0a").opacity(0.98), // Vert très sombre
-                    Color(hex: "56c228").opacity(backgroundPulse ? 0.15 : 0.08), // Vert foncé du logo
-                    Color(hex: "5ee852").opacity(backgroundPulse ? 0.12 : 0.06), // Vert clair du logo
-                    Color(hex: "0a1f0a").opacity(0.95) // Vert très sombre
+                    Color(hex: "0a1f0a").opacity(0.98),
+                    Color(hex: "56c228").opacity(backgroundPulse ? 0.15 : 0.08),
+                    Color(hex: "5ee852").opacity(backgroundPulse ? 0.12 : 0.06),
+                    Color(hex: "0a1f0a").opacity(0.95)
                 ]),
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -60,9 +81,9 @@ struct LoadingView: View {
             .ignoresSafeArea()
             .animation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true), value: backgroundPulse)
             
-            // Particules flottantes
+            // Particules flottantes décoratives
             ForEach(0..<15, id: \.self) { index in
-                let particleColors = [Color(hex: "5ee852"), Color(hex: "56c228"), Color.white, Color(hex: "5ee852"), Color(hex: "56c228")]
+                let particleColors = [Color(hex: "5ee852"), Color(hex: "56c228"), Color.white]
                 Circle()
                     .fill(
                         LinearGradient(
@@ -88,145 +109,163 @@ struct LoadingView: View {
             VStack(spacing: 40) {
                 Spacer()
                 
-                // Logo avec animation complexe
-                ZStack {
-                    // Cercle de lueur extérieure
-                    Circle()
-                        .fill(
-                            RadialGradient(
-                                gradient: Gradient(colors: [
-                                    Color(hex: "5ee852").opacity(glowIntensity * 0.4), // Vert clair principal
-                                    Color(hex: "56c228").opacity(glowIntensity * 0.3), // Vert foncé
-                                    Color.white.opacity(glowIntensity * 0.2), // Blanc
-                                    Color.clear
-                                ]),
-                                center: .center,
-                                startRadius: 10,
-                                endRadius: 100
-                            )
-                        )
-                        .frame(width: 200, height: 200)
-                        .scaleEffect(pulseAnimation ? 1.2 : 1.0)
-                        .opacity(glowIntensity)
-                    
-                    // Logo sans l'œil (arrière-plan)
-                    Image("logosansoeil")
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 150, height: 150)
-                        .scaleEffect(logoScale)
-                        .rotationEffect(.degrees(rotationAngle))
-                        .shadow(color: Color(hex: "5ee852").opacity(0.6), radius: 15, x: 0, y: 8)
-                        .shadow(color: Color(hex: "56c228").opacity(0.4), radius: 25, x: 0, y: 12)
-                        .shadow(color: .white.opacity(0.3), radius: 35, x: 0, y: 15)
-                        .matchedGeometryEffect(id: "logoBase", in: logoNamespace) // Match move pour le logo
-                    
-                    // Œil qui apparaît progressivement avec effet spectaculaire
-                    ZStack {
-                        // Halo autour de l'œil
-                        if eyeGlow {
-                            Circle()
-                                .fill(
-                                    RadialGradient(
-                                        gradient: Gradient(colors: [
-                                            Color(hex: "5ee852").opacity(0.7), // Vert clair
-                                            Color(hex: "56c228").opacity(0.5), // Vert foncé
-                                            Color.white.opacity(0.3), // Blanc
-                                            Color.clear
-                                        ]),
-                                        center: .center,
-                                        startRadius: 5,
-                                        endRadius: 40
-                                    )
-                                )
-                                .frame(width: 80, height: 80)
-                                .scaleEffect(pulseAnimation ? 1.3 : 1.0)
-                                .opacity(eyeOpacity)
-                        }
-                        
-                        // L'œil principal (ne tourne PAS avec le logo)
-                        Image("eye")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 42, height: 42) // Taille réduite
-                            .rotationEffect(.degrees(11)) // Rotation de 11° pour alignement
-                            .offset(x: -3, y: 0) // Même décalage que dans ContentView
-                            .opacity(eyeBlink ? 0.1 : eyeOpacity) // Effet de clignement
-                            .scaleEffect(eyeBlink ? CGSize(width: 1.0, height: 0.1) : CGSize(width: eyeScale, height: eyeScale)) // Clignement vertical
-                            .shadow(color: Color(hex: "5ee852").opacity(0.8), radius: 10, x: 0, y: 0)
-                            .shadow(color: Color(hex: "56c228").opacity(0.6), radius: 20, x: 0, y: 0)
-                            .shadow(color: .white.opacity(0.4), radius: 30, x: 0, y: 0)
-                            .scaleEffect(pulseAnimation ? 1.1 : 1.0)
-                            .matchedGeometryEffect(id: "logoEye", in: logoNamespace) // Match move pour l'œil
-                    }
-                }
-                .onAppear {
-                    startLoadingAnimation()
-                }
+                // Logo animé avec effets complexes
+                logoAnimationView
                 
-                // Titre avec animation élégante
-                if showTitle {
-                    VStack(spacing: 16) {
-                        Text("VizAI")
-                            .font(.system(size: 42, weight: .heavy, design: .rounded))
-                            .foregroundColor(Color(hex: "f0fff0")) // Blanc très légèrement vert
-                            .shadow(color: Color(hex: "5ee852").opacity(0.5), radius: 10, x: 0, y: 5)
-                            .scaleEffect(showTitle ? 1 : 0.8)
-                            .opacity(showTitle ? 1 : 0)
-                            .offset(y: showTitle ? 0 : 30)
-                        
-                        if showSubtitle {
-                            Text("Vision Beyond Eyes")
-                                .font(.system(size: 18, weight: .medium, design: .rounded))
-                                .foregroundColor(Color(hex: "f0fff0").opacity(0.9)) // Blanc très légèrement vert
-                                .shadow(color: Color(hex: "56c228").opacity(0.3), radius: 5, x: 0, y: 2)
-                                .scaleEffect(showSubtitle ? 1 : 0.8)
-                                .opacity(showSubtitle ? 1 : 0)
-                                .offset(y: showSubtitle ? 0 : 20)
-                        }
-                    }
-                }
+                // Titre et sous-titre avec apparition progressive
+                titleSection
                 
                 Spacer()
                 
-                // Indicateur de chargement amélioré
-                VStack(spacing: 20) {
-                    ZStack {
-                        Circle()
-                            .stroke(Color(hex: "56c228").opacity(0.3), lineWidth: 3)
-                            .frame(width: 40, height: 40)
-                        
-                        Circle()
-                            .trim(from: 0, to: 0.7)
-                            .stroke(
-                                LinearGradient(
-                                    gradient: Gradient(colors: [Color(hex: "5ee852"), Color(hex: "56c228")]),
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                            )
-                            .frame(width: 40, height: 40)
-                            .rotationEffect(.degrees(rotationAngle))
-                    }
-                    
-                    Text("Initialisation de l'IA...")
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                        .foregroundColor(Color(hex: "f0fff0").opacity(0.8)) // Blanc très légèrement vert
-                        .opacity(showTitle ? 1 : 0)
-                }
-                .padding(.bottom, 60)
+                // Indicateur de chargement
+                loadingIndicator
             }
         }
     }
     
+    // MARK: - Logo avec Animation Complexe
+    private var logoAnimationView: some View {
+        ZStack {
+            // Cercle de lueur extérieure
+            Circle()
+                .fill(
+                    RadialGradient(
+                        gradient: Gradient(colors: [
+                            Color(hex: "5ee852").opacity(glowIntensity * 0.4),
+                            Color(hex: "56c228").opacity(glowIntensity * 0.3),
+                            Color.white.opacity(glowIntensity * 0.2),
+                            Color.clear
+                        ]),
+                        center: .center,
+                        startRadius: 10,
+                        endRadius: 100
+                    )
+                )
+                .frame(width: 200, height: 200)
+                .scaleEffect(pulseAnimation ? 1.2 : 1.0)
+                .opacity(glowIntensity)
+            
+            // Logo base sans l'œil
+            Image("logosansoeil")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 150, height: 150)
+                .scaleEffect(logoScale)
+                .rotationEffect(.degrees(rotationAngle))
+                .shadow(color: Color(hex: "5ee852").opacity(0.6), radius: 15, x: 0, y: 8)
+                .matchedGeometryEffect(id: "logoBase", in: logoNamespace)
+            
+            // Œil avec effets visuels
+            eyeAnimationView
+        }
+        .onAppear {
+            startLoadingAnimation()
+        }
+    }
+    
+    // MARK: - Animation de l'Œil
+    private var eyeAnimationView: some View {
+        ZStack {
+            // Halo autour de l'œil
+            if eyeGlow {
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            gradient: Gradient(colors: [
+                                Color(hex: "5ee852").opacity(0.7),
+                                Color(hex: "56c228").opacity(0.5),
+                                Color.white.opacity(0.3),
+                                Color.clear
+                            ]),
+                            center: .center,
+                            startRadius: 5,
+                            endRadius: 40
+                        )
+                    )
+                    .frame(width: 80, height: 80)
+                    .scaleEffect(pulseAnimation ? 1.3 : 1.0)
+                    .opacity(eyeOpacity)
+            }
+            
+            // Œil principal avec clignement
+            Image("eye")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 42, height: 42)
+                .rotationEffect(.degrees(11)) // Alignement avec le logo
+                .offset(x: -3, y: 0)
+                .opacity(eyeBlink ? 0.1 : eyeOpacity)
+                .scaleEffect(eyeBlink ? CGSize(width: 1.0, height: 0.1) : CGSize(width: eyeScale, height: eyeScale))
+                .shadow(color: Color(hex: "5ee852").opacity(0.8), radius: 10, x: 0, y: 0)
+                .scaleEffect(pulseAnimation ? 1.1 : 1.0)
+                .matchedGeometryEffect(id: "logoEye", in: logoNamespace)
+        }
+    }
+    
+    // MARK: - Section Titre et Sous-titre
+    private var titleSection: some View {
+        VStack(spacing: 16) {
+            if showTitle {
+                Text("VizAI")
+                    .font(.system(size: 42, weight: .heavy, design: .rounded))
+                    .foregroundColor(Color(hex: "f0fff0"))
+                    .shadow(color: Color(hex: "5ee852").opacity(0.5), radius: 10, x: 0, y: 5)
+                    .scaleEffect(showTitle ? 1 : 0.8)
+                    .opacity(showTitle ? 1 : 0)
+                    .offset(y: showTitle ? 0 : 30)
+                
+                if showSubtitle {
+                    Text("Vision Beyond Eyes")
+                        .font(.system(size: 18, weight: .medium, design: .rounded))
+                        .foregroundColor(Color(hex: "f0fff0").opacity(0.9))
+                        .shadow(color: Color(hex: "56c228").opacity(0.3), radius: 5, x: 0, y: 2)
+                        .scaleEffect(showSubtitle ? 1 : 0.8)
+                        .opacity(showSubtitle ? 1 : 0)
+                        .offset(y: showSubtitle ? 0 : 20)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Indicateur de Chargement
+    private var loadingIndicator: some View {
+        VStack(spacing: 20) {
+            ZStack {
+                Circle()
+                    .stroke(Color(hex: "56c228").opacity(0.3), lineWidth: 3)
+                    .frame(width: 40, height: 40)
+                
+                Circle()
+                    .trim(from: 0, to: 0.7)
+                    .stroke(
+                        LinearGradient(
+                            gradient: Gradient(colors: [Color(hex: "5ee852"), Color(hex: "56c228")]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                    )
+                    .frame(width: 40, height: 40)
+                    .rotationEffect(.degrees(rotationAngle))
+            }
+            
+            Text("Initialisation de l'IA...")
+                .font(.system(size: 16, weight: .medium, design: .rounded))
+                .foregroundColor(Color(hex: "f0fff0").opacity(0.8))
+                .opacity(showTitle ? 1 : 0)
+        }
+        .padding(.bottom, 60)
+    }
+    
+    // MARK: - Séquence d'Animation Complète (8 phases)
+    /// Lance la séquence d'animation du logo en 8 phases sur 6 secondes
     private func startLoadingAnimation() {
-        // Démarrage immédiat des effets de fond
+        // Phase 1: Pulsation du fond
         withAnimation(.easeInOut(duration: 3.0).repeatForever(autoreverses: true)) {
             backgroundPulse = true
         }
         
-        // Phase 1: Apparition dramatique du logo (0-1.2s)
+        // Phase 2: Apparition du logo (0-1.2s)
         withAnimation(.spring(response: 1.2, dampingFraction: 0.6, blendDuration: 0)) {
             logoScale = 1.0
         }
@@ -235,59 +274,54 @@ struct LoadingView: View {
             glowIntensity = 0.8
         }
         
-        // Phase 2: Rotation élégante du logo (0.8-2.5s)
+        // Phase 3: Rotation du logo (0.8-2.5s)
         withAnimation(.easeInOut(duration: 1.7).delay(0.8)) {
-            rotationAngle = 720 // Double rotation pour plus d'effet
+            rotationAngle = 720 // Double rotation
         }
         
-        // Phase 3: Apparition des particules (1.0s)
+        // Phase 4: Particules (1.0s)
         withAnimation(.easeOut(duration: 1.0).delay(1.0)) {
             particlesOpacity = 1.0
         }
         
-        // Phase 4: Apparition spectaculaire de l'œil (1.8-3.2s)
+        // Phase 5: Apparition de l'œil (1.8-3.2s)
         withAnimation(.spring(response: 1.0, dampingFraction: 0.5, blendDuration: 0).delay(1.8)) {
             eyeOpacity = 1.0
             eyeScale = 1.0
             eyeGlow = true
         }
         
-        // Phase 5: Effet de glow plus intense sur l'œil (2.5s)
+        // Phase 6: Intensification glow (2.5s)
         withAnimation(.easeOut(duration: 0.8).delay(2.5)) {
             glowIntensity = 1.0
         }
         
-        // Phase 6: Affichage du titre principal (3.0s)
+        // Phase 7: Titre principal (3.0s)
         withAnimation(.spring(response: 0.8, dampingFraction: 0.7, blendDuration: 0).delay(3.0)) {
             showTitle = true
         }
         
-        // Phase 7: Affichage du sous-titre (3.5s)
+        // Phase 8: Sous-titre (3.5s)
         withAnimation(.spring(response: 0.6, dampingFraction: 0.8, blendDuration: 0).delay(3.5)) {
             showSubtitle = true
         }
         
-        // Phase 8: Animations continues (4.0s+)
+        // Animation continue (4.0s+)
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            // Pulsation continue de l'œil
             withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
                 pulseAnimation = true
             }
-            
-            // SUPPRIMÉ: Plus de rotation continue
-            // withAnimation(.linear(duration: 2.0).repeatForever(autoreverses: false)) {
-            //     rotationAngle += 360
-            // }
         }
         
-        // Effet supplémentaire: clignement de l'œil à intervalles (5.0s+)
+        // Clignement périodique (5.0s+)
         DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
             blinkEyePeriodically()
         }
     }
     
+    // MARK: - Clignement Périodique
+    /// Lance le clignement périodique de l'œil toutes les 2-5 secondes
     private func blinkEyePeriodically() {
-        // Animation de clignement rapide
         withAnimation(.easeInOut(duration: 0.1)) {
             eyeBlink = true
         }
@@ -298,7 +332,7 @@ struct LoadingView: View {
             }
         }
         
-        // Clignement aléatoire entre 2 et 5 secondes
+        // Clignement suivant aléatoire
         let nextBlinkDelay = Double.random(in: 2.0...5.0)
         DispatchQueue.main.asyncAfter(deadline: .now() + nextBlinkDelay) {
             blinkEyePeriodically()
@@ -306,56 +340,52 @@ struct LoadingView: View {
     }
 }
 
-// Vue principale qui gère le chargement avec match move et questionnaire
+// MARK: - Vue Principale avec Gestion de Flux
 struct MainAppView: View {
     @StateObject private var questionnaireManager = QuestionnaireManager()
     @State private var isLoading = true
     @State private var showQuestionnaire = false
-    @Namespace private var logoAnimation // Namespace pour le match move
+    @Namespace private var logoAnimation // Namespace pour match move
     
     var body: some View {
         ZStack {
             if isLoading {
                 LoadingView(logoNamespace: logoAnimation)
                     .onAppear {
-                        // Durée totale du chargement (6 secondes pour profiter de l'animation)
+                        // Durée d'animation complète: 6 secondes
                         DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
                             withAnimation(.easeInOut(duration: 1.0)) {
                                 isLoading = false
-                                // Vérifier si le questionnaire a été complété
                                 checkQuestionnaireStatus()
                             }
                         }
                     }
             } else if showQuestionnaire {
-                // Première utilisation → Questionnaire
-                QuestionnaireView()
+                QuestionnaireView() // Première utilisation
             } else {
-                // Utilisateur existant → App principale avec match move
-                ContentView()
+                ContentView() // App principale
             }
         }
     }
     
+    // MARK: - Vérification Statut Questionnaire
+    /// Vérifie si l'utilisateur a complété le questionnaire initial (3 questions)
+    /// Redirige vers questionnaire si profil incomplet, sinon vers app principale
     private func checkQuestionnaireStatus() {
         let hasCompleteProfile = questionnaireManager.responses.count > 2
         
         if hasCompleteProfile {
-            // Profil complet → Aller directement à l'app
-            print("✅ Profil utilisateur complet (\(questionnaireManager.responses.count)/3 réponses)")
-            showQuestionnaire = false
+            showQuestionnaire = false // → App principale
         } else {
-            // Première utilisation ou profil incomplet → Questionnaire
-            print("📝 Première utilisation ou profil incomplet (\(questionnaireManager.responses.count)/3 réponses)")
-            showQuestionnaire = true
+            showQuestionnaire = true // → Questionnaire
         }
     }
 }
 
-// Prévisualisation
+// MARK: - Preview
 struct LoadingView_Previews: PreviewProvider {
     static var previews: some View {
-        MainAppView() // Affiche la vue complète avec gestion du chargement
-            .preferredColorScheme(.dark) // Force le mode sombre pour mieux voir l'effet
+        MainAppView()
+            .preferredColorScheme(.dark)
     }
 }
